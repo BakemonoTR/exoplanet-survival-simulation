@@ -1197,10 +1197,46 @@ class EmergencyRealismTest(unittest.TestCase):
         self.engine.decision_engine.process_tick = lambda **_kwargs: decision
         self.engine._process_agent_tick(agent, [], nearby_count=1)
 
+        self.assertEqual("retrieve_materials", agent.action.action_type)
+        self.assertFalse(agent.inventory.has_usable_tool())
+        for tick in range(1, 3):
+            self.engine.current_tick = tick
+            self.engine._process_agent_tick(agent, [], nearby_count=1)
+
         self.assertTrue(agent.inventory.has_usable_tool())
         self.assertTrue(agent.inventory.has_item("stone_hammer"))
         for material, quantity in stone_recipe["materials"].items():
             self.assertEqual(0, self.engine.central_depot_inventory[material])
+
+    def test_remote_craft_materials_require_a_physical_storage_trip(self):
+        agent = self.crew[0]
+        agent.x = self.engine.lz_x + 8
+        agent.y = self.engine.lz_y
+        agent._in_habitat = False
+        agent.needs.temperature_stress = 50.0
+        agent.action.clear()
+        agent.inventory.materials.clear()
+        for tool in ("multitool_kit", "hand_tools", "stone_hammer"):
+            agent.inventory.items.pop(tool, None)
+            agent.inventory.tool_durability.pop(tool, None)
+        recipe = self.engine._get_recipe("stone_hammer")
+        for material, quantity in recipe["materials"].items():
+            self.engine.central_depot_inventory[material] = quantity
+        depot_before = dict(self.engine.central_depot_inventory)
+        self.engine.decision_engine.process_tick = lambda **_kwargs: {
+            "action": "craft_item",
+            "target": {"recipe": "stone_hammer", "tool_recovery": True},
+            "reasoning": "physical storage access regression",
+            "deterministic": True,
+        }
+
+        self.engine._process_agent_tick(agent, [], nearby_count=1)
+
+        self.assertEqual("move", agent.action.action_type)
+        self.assertTrue(agent.action.target["material_pickup_route"])
+        self.assertEqual(depot_before, self.engine.central_depot_inventory)
+        self.assertEqual({}, agent.inventory.materials)
+        self.assertFalse(agent.inventory.has_item("stone_hammer"))
 
     def test_chief_engineer_borrows_nearby_shared_tool_before_primitive_rebuild(self):
         engineer, donor = self.crew

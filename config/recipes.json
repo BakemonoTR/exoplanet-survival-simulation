@@ -434,7 +434,7 @@
     "storage_crate": {
       "tier": 1,
       "display_name": "Storage Container",
-      "description": "A sealed basalt-and-iron container for material storage at the camp. Agents can deposit and withdraw materials without carrying everything. Each crate holds 200 kg of materials.",
+      "description": "A sealed basalt-and-iron 200 kg working-stock buffer beside the industrial yard. Crew must physically reach the base depot or this container before loose material can enter their carried inventory. Audited landed cargo and bulk regolith remain on their own pallets, silos and stockpiles.",
       "materials": {
         "iron_ore": 10,
         "basalt": 8
@@ -449,7 +449,8 @@
         "effects": {
           "storage_capacity_kg": 200,
           "material_preservation": true,
-          "accessible_radius_units": 2
+          "accessible_radius_units": 2,
+          "material_transfer_time_reduction_fraction": 0.5
         }
       },
       "colony_contribution": null,

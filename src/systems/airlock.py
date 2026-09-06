@@ -14,6 +14,27 @@ class AirlockController:
     return_reserves: dict = field(default_factory=dict)
     blocked_reason: str | None = None
 
+    def advance(self, tick):
+        """Advance completed pressure cycles from the mission clock.
+
+        Cycle completion is a property of elapsed time, not of the original
+        occupant asking for the chamber again.  Advancing once per simulation
+        tick prevents an interrupted/self-care action from leaving a finished
+        chamber occupied indefinitely.
+        """
+        self.permits = {
+            key: valid_until
+            for key, valid_until in self.permits.items()
+            if valid_until >= tick
+        }
+        if self.active and tick >= self.active["ready_tick"]:
+            completed_key = self.active["key"]
+            self.completed_cycles += 1
+            # Processing order may put the original occupant after another
+            # requester.  Retain the permit through the following tick.
+            self.permits[completed_key] = tick + 1
+            self.active = None
+
     def charge_cycle(self, crew_ids, direction, stores):
         """Reserve return consumables from existing stores, never create them.
 
@@ -60,21 +81,16 @@ class AirlockController:
         if not ids or len(ids) > self.capacity or direction not in {"in", "out"}:
             return False
         key = (ids, direction)
-        self.permits = {k: t for k, t in self.permits.items() if t >= tick}
+        expiry = max(6, self.cycle_ticks * 3)
+        self.advance(tick)
         if key in self.permits:
             return True
         # A cancelled route cannot own the chamber or queue forever.
-        expiry = max(6, self.cycle_ticks * 3)
         self.queue = [q for q in self.queue if tick - q["last_seen"] <= expiry]
         if self.active and tick - self.active["last_seen"] > expiry:
             self.active = None
         if self.active and self.active["key"] == key:
             self.active["last_seen"] = tick
-            if tick >= self.active["ready_tick"]:
-                self.completed_cycles += 1
-                self.permits[key] = tick
-                self.active = None
-                return True
             return False
         entry = next((q for q in self.queue if q["key"] == key), None)
         if entry is None:

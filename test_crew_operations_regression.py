@@ -62,6 +62,58 @@ class CrewOperationsRegressionTest(unittest.TestCase):
         self.assertNotEqual("sleep", agent.action.action_type)
         self.assertEqual("shelter", agent.action.target.get("destination"))
 
+    def test_enclosed_cnc_is_not_human_pressure_space_or_crew_quarters(self):
+        agent = self.crew[0]
+        cnc = next(
+            structure for structure in self.engine.placed_structures
+            if structure.get("type") == "cnc_fabricator"
+        )
+        agent.x, agent.y = int(cnc["x"]), int(cnc["y"])
+        agent._in_habitat = False
+        self.assertTrue(cnc.get("environmentally_sealed_machine"))
+        self.assertFalse(cnc.get("pressurized"))
+        self.assertIsNone(self.engine._pressurized_structure_at(agent.x, agent.y))
+        self.assertFalse(self.engine._is_crew_quarters_location(agent))
+
+        for requested_action in ("sleep", "wash", "service_suit"):
+            with self.subTest(action=requested_action):
+                agent.action.clear()
+                agent.x, agent.y = int(cnc["x"]), int(cnc["y"])
+                agent._in_habitat = False
+                with patch.object(
+                    self.planner,
+                    "process_tick",
+                    return_value={
+                        "action": requested_action,
+                        "target": {"habitat": True},
+                        "deterministic": True,
+                    },
+                ):
+                    self.engine._process_agent_tick(agent, [], 0)
+                self.assertEqual("move", agent.action.action_type)
+                self.assertEqual("shelter", agent.action.target.get("destination"))
+
+        refuge = {
+            "id": "test_greenhouse_refuge",
+            "type": "greenhouse",
+            "x": self.engine.lz_x + 12,
+            "y": self.engine.lz_y + 12,
+            "health": 1.0,
+            "pressurized": True,
+        }
+        self.engine.placed_structures.append(refuge)
+        agent.x, agent.y = refuge["x"], refuge["y"]
+        agent._in_habitat = True
+        self.assertTrue(self.engine._is_crew_quarters_location(agent))
+        agent.needs.energy = 40.0
+        agent.action.action_type = "sleep"
+        agent.action.target = {"habitat": True, "storm_refuge": True}
+        agent.action.ticks_remaining = 12
+        energy_before = agent.needs.energy
+        self.engine._process_agent_tick(agent, [], 0)
+        self.assertGreater(agent.needs.energy, energy_before)
+        self.assertEqual("sleep", agent.action.action_type)
+
     def test_rover_reserved_during_preparation_cannot_be_stolen(self):
         self.crew[1].action.action_type = "sleep"
         self.crew[1].action.ticks_remaining = 12

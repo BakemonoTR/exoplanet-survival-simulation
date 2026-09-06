@@ -381,6 +381,8 @@ class SimulationEngine:
             "ration_packs": 30,
             "water_packs": 40,
         }
+        self._storage_assisted_transfers = 0
+        self._storage_material_retrievals = 0
         # Semiconductor junctions, PEM membranes, bearings, space-rated
         # polymers and qualified control boards cannot be made from loose ore
         # by a six-person field shop.  They are finite, mass-accounted cargo;
@@ -1672,11 +1674,13 @@ class SimulationEngine:
         """Return the deterministic civil-layout envelope for one asset."""
         profiles = {
             "storage_crate": {
-                "zone": "logistics_yard", "preferred_offset": (-5, 4),
-                "preferred_offsets": [(-5, 4), (-7, 5), (-4, 7)],
-                "min_radius": 4, "max_radius": 10,
+                "zone": "industrial_working_stock", "preferred_offset": (-3, -3),
+                "preferred_offsets": [(-3, -3), (-5, -3), (-3, -5)],
+                "min_radius": 3, "max_radius": 7,
                 "render_scale": 0.56,
-                "related_types": {"eclss_lander_hub", "forge"},
+                "related_types": {
+                    "eclss_lander_hub", "forge", "cnc_fabricator"
+                },
             },
             "life_support_distribution_grid": {
                 "zone": "utility_spine", "preferred_offset": (-4, -4),
@@ -3555,6 +3559,247 @@ class SimulationEngine:
             for material, quantity in materials.items()
         )
 
+    def _operational_storage_crates(self) -> list[dict]:
+        """Return usable working-stock containers at their physical cells."""
+        return [
+            structure
+            for structure in getattr(self, "placed_structures", [])
+            if structure.get("type") == "storage_crate"
+            and not structure.get("under_construction", False)
+            and not structure.get("destroyed", False)
+            and float(structure.get("health", 1.0)) > 0.0
+        ]
+
+    def _material_storage_access_point(
+        self,
+        agent: Agent,
+        manifest: dict[str, int] | None = None,
+    ) -> dict:
+        """Choose a real storage access cell for one person-sized transfer.
+
+        ``central_depot_inventory`` remains the audited aggregate ledger for
+        the compact base logistics yard.  This method controls physical
+        access to that ledger: inventory may enter a backpack only while the
+        worker is at the lander depot or an operational 200 kg working buffer.
+        Heavy construction cargo continues through the transporter ledger.
+        """
+        base = {
+            "storage_type": "central_depot",
+            "storage_id": "central_depot",
+            "x": int(getattr(self, "lz_x", agent.x)),
+            "y": int(getattr(self, "lz_y", agent.y)),
+            "access_radius_cells": 2,
+            "transfer_ticks": ticks_for_minutes(
+                20.0, self.SIM_MINUTES_PER_TICK
+            ),
+        }
+        candidates = [base]
+        requested_mass_kg = self._material_manifest_mass_kg(manifest or {})
+        recipe = self._get_recipe("storage_crate") or {}
+        effects = recipe.get("output", {}).get("effects", {})
+        rated_capacity_kg = max(
+            0.0, float(effects.get("storage_capacity_kg", 0.0))
+        )
+        if requested_mass_kg <= rated_capacity_kg + 1e-6:
+            reduction = min(
+                0.75,
+                max(
+                    0.0,
+                    float(effects.get(
+                        "material_transfer_time_reduction_fraction", 0.0
+                    )),
+                ),
+            )
+            transfer_minutes = max(
+                self.SIM_MINUTES_PER_TICK,
+                20.0 * (1.0 - reduction),
+            )
+            for crate in self._operational_storage_crates():
+                candidates.append({
+                    "storage_type": "storage_crate",
+                    "storage_id": str(crate.get("id", "storage_crate")),
+                    "x": int(crate.get("x", base["x"])),
+                    "y": int(crate.get("y", base["y"])),
+                    "access_radius_cells": max(
+                        0, int(effects.get("accessible_radius_units", 0))
+                    ),
+                    "transfer_ticks": ticks_for_minutes(
+                        transfer_minutes, self.SIM_MINUTES_PER_TICK
+                    ),
+                })
+        return min(
+            candidates,
+            key=lambda point: (
+                max(
+                    abs(agent.x - int(point["x"])),
+                    abs(agent.y - int(point["y"])),
+                ),
+                0 if point["storage_type"] == "storage_crate" else 1,
+                str(point["storage_id"]),
+            ),
+        )
+
+    def _material_pickup_decision(
+        self, agent: Agent, action: str, target: dict
+    ) -> tuple[str, dict]:
+        """Route loose craft inputs through a physical storage transaction."""
+        pending = getattr(agent, "_pending_material_pickup", None)
+        recovery_actions = {
+            "drink", "eat", "sleep", "rest", "medical_rest", "treat",
+            "rescue", "refill_o2", "service_suit", "enter_habitat",
+        }
+        if isinstance(pending, dict) and action not in recovery_actions:
+            action = str(pending.get("action", action))
+            target = dict(pending.get("target", target))
+        if action != "craft_item":
+            return action, target
+
+        recipe_name = str(target.get("recipe", ""))
+        recipe = self._get_recipe(recipe_name)
+        if not recipe:
+            agent._pending_material_pickup = None
+            return action, target
+        missing = {
+            str(material): int(quantity) - int(
+                agent.inventory.materials.get(material, 0)
+            )
+            for material, quantity in recipe.get("materials", {}).items()
+            if int(agent.inventory.materials.get(material, 0)) < int(quantity)
+        }
+        if not missing:
+            agent._pending_material_pickup = None
+            return action, target
+        if any(
+            self._available_depot_quantity(material) < quantity
+            for material, quantity in missing.items()
+        ):
+            # The craft executor may still accept an adjacent teammate's
+            # carried stock. It must never pull from a remote person.
+            return action, target
+
+        access = self._material_storage_access_point(agent, missing)
+        distance = max(
+            abs(agent.x - int(access["x"])),
+            abs(agent.y - int(access["y"])),
+        )
+        crate_requires_eva = (
+            access["storage_type"] == "storage_crate"
+            and bool(getattr(agent, "_in_habitat", False))
+        )
+        if (
+            distance > int(access["access_radius_cells"])
+            or crate_requires_eva
+        ):
+            agent._pending_material_pickup = {
+                "action": "craft_item",
+                "target": dict(target),
+            }
+            return "move", {
+                "x": int(access["x"]),
+                "y": int(access["y"]),
+                "destination": "material_storage",
+                "mission_action": "craft_item",
+                "recipe": recipe_name,
+                "storage_type": access["storage_type"],
+                "storage_id": access["storage_id"],
+                "material_pickup_route": True,
+            }
+
+        depot = getattr(self, "central_depot_inventory", {})
+        for material, quantity in missing.items():
+            depot[material] = int(depot.get(material, 0)) - quantity
+            agent.inventory.add_material(material, quantity)
+        agent._pending_material_pickup = {
+            "action": "craft_item",
+            "target": dict(target),
+        }
+        self._storage_material_retrievals += 1
+        if self._on_event:
+            self._on_event({
+                "type": "retrieve_materials",
+                "agent": agent.name,
+                "recipe": recipe_name,
+                "materials": dict(missing),
+                "storage_type": access["storage_type"],
+                "storage_id": access["storage_id"],
+                "tick": self.current_tick,
+            })
+        return "retrieve_materials", {
+            "recipe": recipe_name,
+            "materials": dict(missing),
+            "storage_type": access["storage_type"],
+            "storage_id": access["storage_id"],
+            "physical_pickup": True,
+            "transfer_ticks": int(access["transfer_ticks"]),
+        }
+
+    def _storage_logistics_snapshot(self) -> dict:
+        """Describe the finite working-stock buffer without capping mission cargo.
+
+        The lander pallets, cargo transporter decks and bulk stockpiles retain
+        the audited mission inventory. A field-built crate organizes only the
+        frequently handled working set, so it improves transfer throughput but
+        never becomes an unrelated colony-readiness gate.
+        """
+        recipe = self._get_recipe("storage_crate") or {}
+        effects = recipe.get("output", {}).get("effects", {})
+        rated_capacity_kg = max(
+            0.0, float(effects.get("storage_capacity_kg", 0.0))
+        )
+        crates = self._operational_storage_crates()
+        effective_capacity_kg = sum(
+            rated_capacity_kg * min(
+                1.0, max(0.0, float(crate.get("health", 1.0)))
+            )
+            for crate in crates
+        )
+        reduction = min(
+            0.75,
+            max(
+                0.0,
+                float(effects.get(
+                    "material_transfer_time_reduction_fraction", 0.0
+                )),
+            ),
+        ) if crates else 0.0
+        base_transfer_minutes = 20.0
+        transfer_minutes = max(
+            self.SIM_MINUTES_PER_TICK,
+            base_transfer_minutes * (1.0 - reduction),
+        )
+        return {
+            "operational_crates": len(crates),
+            "working_buffer_capacity_kg": round(effective_capacity_kg, 1),
+            "material_preservation_active": bool(
+                crates and effects.get("material_preservation", False)
+            ),
+            "accessible_radius_cells": int(
+                effects.get("accessible_radius_units", 0)
+            ) if crates else 0,
+            "material_transfer_time_reduction_fraction": round(reduction, 3),
+            "material_transfer_ticks": ticks_for_minutes(
+                transfer_minutes, self.SIM_MINUTES_PER_TICK
+            ),
+            "assisted_transfers": int(getattr(
+                self, "_storage_assisted_transfers", 0
+            )),
+            "physical_material_retrievals": int(getattr(
+                self, "_storage_material_retrievals", 0
+            )),
+            "access_points": [
+                {
+                    "storage_id": str(crate.get("id", "storage_crate")),
+                    "x": int(crate.get("x", getattr(self, "lz_x", 0))),
+                    "y": int(crate.get("y", getattr(self, "lz_y", 0))),
+                }
+                for crate in crates
+            ],
+            "scope": "frequently_handled_field_stock",
+            "bulk_and_landed_cargo_remain_separate": True,
+            "loose_material_pickup_requires_physical_access": True,
+            "colony_score_gate": False,
+        }
+
     def _reserve_construction_cargo(
         self,
         *,
@@ -4114,6 +4359,23 @@ class SimulationEngine:
     def _is_pressurized_location(self, x: int, y: int) -> bool:
         return (self._is_lander_footprint_cell(x, y)
                 or self._pressurized_structure_at(x, y) is not None)
+
+    def _is_crew_quarters_location(self, agent: Agent) -> bool:
+        """Return whether a pressure hull can safely host personal recovery.
+
+        A commissioned greenhouse is a temporary refuge during a surface
+        hazard and has water/air interfaces, although it contributes no berth
+        capacity to readiness. Industrial pressure cabins remain workplaces.
+        """
+        if not bool(getattr(agent, "_in_habitat", False)):
+            return False
+        if self._is_lander_footprint_cell(agent.x, agent.y):
+            return True
+        structure = self._pressurized_structure_at(agent.x, agent.y)
+        return bool(
+            structure
+            and structure.get("type") in {"habitat_module", "greenhouse"}
+        )
 
     def _outbound_work_order_rejection(self, agent: Agent, target: dict) -> str | None:
         """Revalidate the physical job immediately before opening the airlock."""
@@ -8182,7 +8444,15 @@ class SimulationEngine:
                     "footprint_half_width_cells": 0,
                     "footprint_half_height_cells": 0,
                     "render_scale": 0.66,
-                    "pressurized": machine_type == "cnc_fabricator",
+                    # The CNC/clean-assembly equipment is enclosed against
+                    # dust and temperature swings, but its process enclosure
+                    # is not a crew pressure hull.  Treating the surrounding
+                    # work cell as habitat made passers-by teleport indoors
+                    # and attempt sleep or suit service beside the machine.
+                    "pressurized": False,
+                    "environmentally_sealed_machine": (
+                        machine_type == "cnc_fabricator"
+                    ),
                     "capabilities": list(
                         industry_capabilities.get(machine_type, [])
                     ),
@@ -8394,6 +8664,10 @@ class SimulationEngine:
 
         for crew in self.agents:
             crew._telemetry_tick = self.current_tick
+
+        # A completed pressure cycle releases on the mission clock even if its
+        # original requester changed action before being processed again.
+        self.airlock.advance(self.current_tick)
 
         # Meals are charged when an eat action consumes a physical source.
         # This counter is telemetry only; it must never drain a store again.
@@ -10316,7 +10590,10 @@ class SimulationEngine:
         # may drink from an actual habitat source while remaining in the bunk;
         # this runs before metabolic/death timers so an active rest action
         # cannot conceal available water until fatal dehydration.
-        if (not agent._in_habitat and agent.action.action_type in {"sleep", "service_suit"}):
+        if (
+            agent.action.action_type in {"sleep", "service_suit", "wash"}
+            and not self._is_crew_quarters_location(agent)
+        ):
             self._return_for_indoor_recovery(agent, "routine_recovery_requires_pressure")
         medical_rest_oral_hydration = (
             self._oral_hydration_during_medical_rest(agent)
@@ -11395,11 +11672,28 @@ class SimulationEngine:
                 # outcome. Do not teach the policy from an executor race.
                 agent._rl_transition_pending = False
             
-            if not agent._in_habitat and action in {"sleep", "service_suit"}:
+            if (
+                action in {"sleep", "service_suit", "wash"}
+                and not self._is_crew_quarters_location(agent)
+            ):
                 self._return_for_indoor_recovery(agent, action)
                 action, target = "move", dict(agent.action.target)
                 decision["deterministic"] = True
             action, target = self._indoor_activity_decision(agent, action, target)
+            action, target = self._material_pickup_decision(
+                agent, action, target
+            )
+            if target.get("material_pickup_route") or target.get(
+                "physical_pickup"
+            ):
+                decision["deterministic"] = True
+                # Storage routing is an execution prerequisite, not a new
+                # policy choice or a repeatable source of RL reward.
+                agent._rl_transition_pending = False
+                reasoning = (
+                    f"{agent.name} physically retrieving the loose materials "
+                    "before fabrication"
+                )
             agent.last_decision = {
                 "action": action,
                 "target": target,
@@ -11660,7 +11954,7 @@ class SimulationEngine:
                 lz_y = getattr(self, "lz_y", 1000)
                 dist_base = max(abs(agent.x - lz_x), abs(agent.y - lz_y))
                 
-                if dist_base <= 3:
+                if dist_base <= 3 or self._is_crew_quarters_location(agent):
                     if not getattr(agent, "_in_habitat", False):
                         airlock_x, airlock_y = self._lander_airlock_position()
                         if self._is_lander_airlock_cell(agent.x, agent.y):
@@ -13036,6 +13330,16 @@ class SimulationEngine:
                     agent.action.action_type = "tool_transfer_blocked"
                     agent.action.target = {"donor_id": donor_id}
                     agent.action.ticks_remaining = 1
+            elif action == "retrieve_materials":
+                # The inventory transfer was committed atomically above only
+                # after reaching a real depot/crate access cell. This action
+                # accounts for opening, checking and loading the container;
+                # fabrication resumes on the following decision tick.
+                agent.action.action_type = "retrieve_materials"
+                agent.action.target = dict(target)
+                agent.action.ticks_remaining = max(
+                    1, int(target.get("transfer_ticks", 1))
+                )
             elif action == "craft_item":
                 recipe_name = target.get("recipe", "")
                 recipe = self._get_recipe(recipe_name)
@@ -13068,20 +13372,19 @@ class SimulationEngine:
                     agent.action.ticks_remaining = 1
                     return agent_events
 
-                depot = getattr(self, "central_depot_inventory", {})
                 for material, needed in recipe.get("materials", {}).items():
                     current = agent.inventory.materials.get(material, 0)
-                    available_depot = self._available_depot_quantity(material)
-                    if current < needed and available_depot > 0:
-                        take = min(needed - current, available_depot)
-                        depot[material] -= take
-                        agent.inventory.add_material(material, take)
-                        current += take
                     if current < needed:
                         for teammate in self.agents:
                             if (
                                 teammate.id != agent.id
                                 and getattr(teammate.status, "value", str(teammate.status)) != "dead"
+                                and max(
+                                    abs(teammate.x - agent.x),
+                                    abs(teammate.y - agent.y),
+                                ) <= 1
+                                and bool(getattr(teammate, "_in_habitat", False))
+                                == bool(getattr(agent, "_in_habitat", False))
                             ):
                                 available = teammate.inventory.materials.get(material, 0)
                                 if available > 0:
@@ -15848,31 +16151,67 @@ class SimulationEngine:
                     agent.action.ticks_remaining = 1
             elif action == "deposit_materials":
                 # Haul and store raw minerals/components into Central Storage Depot Silo
-                lz_x = getattr(self, "lz_x", 1000)
-                lz_y = getattr(self, "lz_y", 1000)
-                dist = max(abs(agent.x - lz_x), abs(agent.y - lz_y))
-                if dist > 2:
+                carried_manifest = self._positive_material_manifest(
+                    agent.inventory.materials
+                )
+                storage_access = self._material_storage_access_point(
+                    agent, carried_manifest
+                )
+                storage_x = int(storage_access["x"])
+                storage_y = int(storage_access["y"])
+                dist = max(
+                    abs(agent.x - storage_x), abs(agent.y - storage_y)
+                )
+                crate_requires_eva = (
+                    storage_access["storage_type"] == "storage_crate"
+                    and bool(getattr(agent, "_in_habitat", False))
+                )
+                if (
+                    dist > int(storage_access["access_radius_cells"])
+                    or crate_requires_eva
+                ):
                     # Preserve physical walking speed across tick resolutions
                     # and keep the haul route cardinal rather than diagonal.
                     step_speed = self.EVA_WALK_SPEED_CELLS * (
                         2 if dist > 3 else 1
                     )
                     dx, dy = self._cardinal_step_toward(
-                        agent, lz_x, lz_y, step_speed
+                        agent, storage_x, storage_y, step_speed
                     )
-                    agent.x = max(0, min(self.world.map_size - 1, agent.x + dx))
-                    agent.y = max(0, min(self.world.map_size - 1, agent.y + dy))
+                    next_x = max(
+                        0, min(self.world.map_size - 1, agent.x + dx)
+                    )
+                    next_y = max(
+                        0, min(self.world.map_size - 1, agent.y + dy)
+                    )
+                    if (
+                        agent._in_habitat
+                        and not self._is_pressurized_location(next_x, next_y)
+                        and not self._prepare_agent_for_eva(
+                            agent,
+                            target_position=(storage_x, storage_y),
+                        )
+                    ):
+                        return agent_events
+                    agent.x = next_x
+                    agent.y = next_y
                     agent.action.action_type = "move"
                     agent.action.target = {
-                        "x": lz_x,
-                        "y": lz_y,
-                        "destination": "central_depot",
+                        "x": storage_x,
+                        "y": storage_y,
+                        "destination": "material_storage",
                         "mission_action": "deposit_materials",
+                        "storage_type": storage_access["storage_type"],
+                        "storage_id": storage_access["storage_id"],
                     }
                     agent.action.ticks_remaining = 1
                 else:
-                    # At Base Silo! Offload materials
+                    # At a physical base-depot or working-buffer access point.
                     depot = getattr(self, "central_depot_inventory", {})
+                    storage_logistics = self._storage_logistics_snapshot()
+                    storage_assisted = (
+                        storage_access["storage_type"] == "storage_crate"
+                    )
                     deposited_count = 0
                     for mat, qty in list(agent.inventory.materials.items()):
                         if qty > 0:
@@ -15885,13 +16224,33 @@ class SimulationEngine:
                         self._on_event({
                             "type": "deposit_materials",
                             "agent": agent.name,
-                            "cause": f"Transferred {deposited_count}x materials to Central Storage Depot Silo",
+                            "cause": (
+                                f"Transferred {deposited_count}x materials to "
+                                "the sealed depot working-stock buffer"
+                                if storage_assisted else
+                                f"Transferred {deposited_count}x materials to "
+                                "Central Storage Depot Silo"
+                            ),
                             "tick": self.current_tick
                         })
                     if deposited_count > 0:
                         self.decision_engine.apply_rl_reward(agent, 3.0, "deposit:success")
                         agent.action.action_type = "deposit_materials"
-                        agent.action.ticks_remaining = 2
+                        agent.action.target = {
+                            "storage_crate_assisted": storage_assisted,
+                            "storage_type": storage_access["storage_type"],
+                            "storage_id": storage_access["storage_id"],
+                            "working_buffer_capacity_kg": (
+                                storage_logistics.get(
+                                    "working_buffer_capacity_kg", 0.0
+                                )
+                            ),
+                        }
+                        agent.action.ticks_remaining = max(
+                            1, int(storage_access["transfer_ticks"])
+                        )
+                        if storage_assisted:
+                            self._storage_assisted_transfers += 1
                     else:
                         agent.action.action_type = "rest"
                         agent.action.target = {"empty_deposit_rejected": True}
@@ -16847,6 +17206,7 @@ class SimulationEngine:
                 for a in self.agents
             ],
             "central_depot_inventory": dict(getattr(self, "central_depot_inventory", {})),
+            "storage_logistics": self._storage_logistics_snapshot(),
             "colony_score": self.colony_score.to_dict(),
             "structures": dict(self.structures_built),
             "placed_structures": [dict(s) for s in getattr(self, "placed_structures", [])],

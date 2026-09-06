@@ -51,6 +51,29 @@ class AirlockConservationTest(unittest.TestCase):
         self.assertTrue(admitted)
         self.assertEqual(0.0, stores['energy_stored_kwh'])
 
+    def test_ready_cycle_releases_chamber_when_another_request_arrives(self):
+        lock = AirlockController(1)
+        self.assertFalse(lock.request(['crew_a'], 'out', 10))
+
+        # crew_a is not polled first on tick 11. The completed physical cycle
+        # still releases the chamber, and its permit survives until crew_a's
+        # next processing turn.
+        self.assertFalse(lock.request(['crew_b'], 'out', 11))
+        self.assertEqual(1, lock.completed_cycles)
+        self.assertEqual((('crew_b',), 'out'), lock.active['key'])
+        self.assertTrue(lock.request(['crew_a'], 'out', 11))
+        self.assertTrue(lock.request(['crew_a'], 'out', 12))
+
+    def test_ready_cycle_releases_chamber_from_clock_without_new_request(self):
+        lock = AirlockController(1)
+        self.assertFalse(lock.request(['crew_a'], 'out', 10))
+
+        lock.advance(11)
+
+        self.assertIsNone(lock.active)
+        self.assertEqual(1, lock.completed_cycles)
+        self.assertTrue(lock.request(['crew_a'], 'out', 11))
+
 
 class MissionFailureFixTest(unittest.TestCase):
     def setUp(self):

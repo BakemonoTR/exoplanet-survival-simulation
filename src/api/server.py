@@ -655,6 +655,7 @@ def on_tick_callback(tick: int, state: dict):
         "spoil_piles": state.get("spoil_piles", []),
         "surface_fleet": state.get("surface_fleet", {}),
         "utility_network": state.get("utility_network", {}),
+        "storage_logistics": state.get("storage_logistics", {}),
         "narrative_status": state.get(
             "narrative_status", state.get("llm_status", {})
         ),
