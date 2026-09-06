@@ -1,0 +1,214 @@
+{
+  "id": "teegardens-star-b",
+  "display_name": "Teegarden's Star b",
+  "epistemic_model": {
+    "classification": "scenario-constrained synthetic surface realization",
+    "observed_parameters": ["radial-velocity orbital period", "minimum mass"],
+    "inferred_parameters": ["radius", "bulk density", "gravity", "equilibrium temperature"],
+    "scenario_assumptions": ["rotation and thermal cycle", "surface pressure and composition", "hydrology", "geology", "biomes and mineral deposits", "surface radiation dose"],
+    "uncertainty_policy": "Unobserved surface properties are deterministic scenario priors for reproducible RL experiments, not measured facts."
+  },
+  "star": {
+    "name": "Teegarden's Star",
+    "type": "M7V late red dwarf",
+    "mass_solar": 0.089,
+    "luminosity_solar": 0.00073,
+    "distance_ly": 12.578,
+    "age_gyr": 8.0
+  },
+  "orbital": {
+    "semi_major_axis_au": 0.0252,
+    "orbital_period_days": 4.91,
+    "eccentricity": 0.0
+  },
+  "physical": {
+    "mass_earth": 1.05,
+    "radius_earth": 1.02,
+    "gravity_g": 1.01,
+    "density_gcc": 5.6,
+    "escape_velocity_kms": 10.7
+  },
+  "surface": {
+    "tidally_locked": false,
+    "day_length_hours": 117.84,
+    "temp_day_c": 40,
+    "temp_night_c": -25,
+    "equilibrium_temp_k": 301,
+    "solar_flux_relative_to_earth": 1.15
+  },
+  "atmosphere": {
+    "present": true,
+    "composition": {"N2": 0.60, "CO2": 0.30, "H2O": 0.05, "Ar": 0.03, "O2": 0.01, "SO2": 0.01},
+    "composition_notes": "Thin N2-CO2 atmosphere, partially stripped by moderate flare activity. Water vapor during warm periods. Mean molecular weight ~0.035 kg/mol.",
+    "o2_fraction": 0.01,
+    "surface_pressure_atm": 0.6,
+    "notes": "Moderate flare activity. Thin atmosphere with limited thermal buffering — temperature swings rapidly between day and night."
+  },
+  "geology": {
+    "bulk_composition": "Earth-like iron core, silicate mantle. Very similar density to Earth suggests near-identical internal structure.",
+    "core_type": "Iron-nickel, likely solid inner core with liquid outer",
+    "mantle_minerals": ["olivine", "pyroxene", "perovskite", "garnet"],
+    "surface_minerals": ["basalt", "regolith", "iron_oxide", "silicate_sand", "evaporite_deposits"],
+    "tectonic_activity": "Low-moderate — old planet (8 Gyr) with diminished but not extinct internal heat. Some residual geological activity.",
+    "volcanism": "Mostly extinct — ancient lava flows and eroded volcanic structures remain"
+  },
+  "hazards": ["stellar_flare", "rapid_thermal_cycling", "dust_storm", "flash_flood"],
+  "flare_profile": {
+    "flare_events_per_80_days": 12,
+    "average_flare_energy_erg": 5e29,
+    "superflare_probability_per_year": 0.05,
+    "uv_flux_relative_to_earth": 1.8,
+    "radiation_baseline_sv_per_hour": 0.00001,
+    "radiation_flare_sv_per_hour": 0.005,
+    "notes": "Teegarden's Star is moderately active — less extreme than Proxima Centauri but more active than Ross 128. Flares are a concern but not constant. The 4.91-day orbital period (= day cycle) means conditions change rapidly."
+  },
+  "radiation_system": {
+    "enabled": true,
+    "model_status": "scenario_prior_not_surface_measurement",
+    "baseline_dose_sv_per_hour": 0.00001,
+    "basis": "A partly stripped 0.6 atm atmosphere is assumed to attenuate, but not eliminate, the active M-dwarf particle field. Atmospheric column and magnetosphere are unobserved."
+  },
+  "world_generation": {
+    "type": "procedural_noise",
+    "noise_octaves": 6,
+    "noise_persistence": 0.45,
+    "noise_lacunarity": 2.0,
+    "elevation_range": [0, 80],
+    "map_size": 2000
+  },
+  "day_night_cycle": {
+    "enabled": true,
+    "cycle_length_ticks": 1412,
+    "day_ticks": 706,
+    "night_ticks": 706,
+    "dawn_dusk_transition_ticks": 48,
+    "notes": "4.91 Earth days = 117.84 hours. Tick counts are authored on the legacy five-minute baseline and normalized to the active mission clock. Temperature, water availability, and hazard profiles shift dramatically between day and night phases."
+  },
+  "biomes": [
+    {
+      "id": "thermal_ridges",
+      "name": "Thermal Ridges",
+      "description": "Sun-facing elevated terrain that heats rapidly during the ~59-hour day. Exposed silicate and basaltic rock expands and contracts with each 4.9-day cycle, creating thermal fracturing patterns. Rich in weathered minerals but surfaces crack and shift regularly. During the long night, these ridges cool dramatically, causing ice crystal formation in rock fissures.",
+      "temp_range_c": [-20, 50],
+      "zone": "elevation_high",
+      "traversable": true,
+      "survival_time_ticks_unprotected": null,
+      "resources": {
+        "silica_sand": "rich",
+        "basalt": "abundant",
+        "iron_ore": "moderate",
+        "regolith": "moderate"
+      },
+      "hazard_modifiers": {
+        "flare_damage_multiplier": 1.3
+      },
+      "day_night_variation": {
+        "day_temp_c": [10, 50],
+        "night_temp_c": [-20, 5],
+        "day_hazards": ["heat_stress"],
+        "night_hazards": ["cold_stress"]
+      }
+    },
+    {
+      "id": "canyon_networks",
+      "name": "Canyon Networks",
+      "description": "Deep, wind-carved canyons that provide natural shelter from temperature extremes and stellar flares. Narrow passages between vertical rock walls. The canyon floors collect mineral runoff and provide the most thermally buffered environment on the planet. However, during transition periods (dawn/dusk), meltwater can create dangerous flash floods.",
+      "temp_range_c": [-5, 25],
+      "zone": "erosion_channels",
+      "traversable": true,
+      "survival_time_ticks_unprotected": null,
+      "resources": {
+        "olivine": "moderate",
+        "regolith": "abundant",
+        "chalcopyrite_ore": "sparse",
+        "calcite": "moderate"
+      },
+      "hazard_modifiers": {
+        "flare_damage_multiplier": 0.4,
+        "flash_flood_probability_per_transition": 0.08,
+        "rockfall_injury_probability_per_eva_hour": 0.003,
+        "movement_speed_modifier": 0.8
+      }
+    },
+    {
+      "id": "dust_plains",
+      "name": "Dust Plains",
+      "description": "Wide, exposed flatlands covered in fine regolith and silicate dust. The rapid day/night thermal cycling generates strong boundary winds at the terminator line (where day meets night), driving frequent dust storms across these plains. The thin atmosphere does little to buffer temperatures — exposure here is felt most acutely.",
+      "temp_range_c": [-25, 40],
+      "zone": "elevation_mid",
+      "traversable": true,
+      "survival_time_ticks_unprotected": null,
+      "resources": {
+        "regolith": "abundant",
+        "calcite": "moderate",
+        "silica_sand": "sparse"
+      },
+      "hazard_modifiers": {
+        "wind_speed_modifier": 1.2
+      },
+      "day_night_variation": {
+        "day_temp_c": [5, 40],
+        "night_temp_c": [-25, -10],
+        "day_hazards": ["heat_stress", "dust_storm"],
+        "night_hazards": ["cold_stress", "dust_storm"]
+      }
+    },
+    {
+      "id": "mineral_deposits",
+      "name": "Concentrated Mineral Deposits",
+      "description": "Localized pockets of high-concentration mineral veins, likely exposed by ancient volcanic or hydrothermal activity. These are the richest resource nodes on the planet but are scattered and relatively small. Multiple agents may need to compete or cooperate for access.",
+      "temp_range_c": [-15, 35],
+      "zone": "localized_scattered",
+      "traversable": true,
+      "survival_time_ticks_unprotected": null,
+      "resources": {
+        "iron_ore": "rich",
+        "silica_sand": "moderate",
+        "sulfur": "sparse",
+        "chalcopyrite_ore": "sparse"
+      },
+      "hazard_modifiers": {
+        "contested_resource": true,
+        "notes": "Small biome — agents will encounter each other here, driving social dynamics"
+      }
+    },
+    {
+      "id": "twilight_pools",
+      "name": "Twilight Basins",
+      "description": "Transient drainage basins in topographic depressions. High atmospheric humidity and diurnal condensation create ephemeral moisture and rich evaporite mineral crusts (carbonates, nitrates, and trace organic sediments). Liquid water is captured from atmospheric humidity using condenser units.",
+      "temp_range_c": [0, 20],
+      "zone": "transition_depressions",
+      "traversable": true,
+      "survival_time_ticks_unprotected": null,
+      "resources": {
+        "calcite": "moderate",
+        "graphite": "moderate",
+        "silica_sand": "sparse"
+      },
+      "hazard_modifiers": {
+        "availability_phase": "transition_only",
+        "available_ticks_per_cycle": 96,
+        "notes": "Condensation features active during dawn/dusk transitions (~48 ticks each)."
+      },
+      "day_night_variation": {
+        "day_state": "arid — dry mineral crusts",
+        "night_state": "chilled — high relative humidity",
+        "transition_state": "condensation — maximum atmospheric moisture"
+      }
+    }
+  ],
+  "resource_modifiers": {
+    "scarcity_factor": 0.5,
+    "iron_ore": "mineral_deposits_concentrated",
+    "chalcopyrite_ore": "very_scarce",
+    "notes": "Water is extracted from the 5% atmospheric H2O vapor using atmospheric condensers (water_collector). Metals are concentrated in scattered ancient hydrothermal mineral deposits."
+  },
+  "difficulty_rating": 3,
+  "difficulty_label": "Medium-Hard",
+  "scientific_references": [
+    "Zechmeister et al. 2019 — Teegarden's Star planets discovery (Astronomy & Astrophysics 627, A49)",
+    "Wandel 2020 — Habitability of Teegarden's Star planets",
+    "Dreizler et al. 2024 — Updated parameters for Teegarden's Star system",
+    "Shields et al. 2016 — Effect of orbital and rotational parameters on planetary climate"
+  ]
+}

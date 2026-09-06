@@ -1,0 +1,279 @@
+# Öteki Gezegen Hayatta Kalma Simülasyonu — Sistem Tasarım Dosyası
+
+> **ARŞİV NOTU (ASAC-6):** Bu dosya ilk konsept taslağıdır; aşağıdaki bazı kapasite, model ve süre örnekleri artık yürürlükte değildir. Çalışan sözleşmenin tek doğruluk kaynağı `config/mission_profile.json`, `config/colony_targets.json`, `config/recipes.json` ve `reports/asac6_fix_report_2026-08-30.md` dosyalarıdır. Güncel görev: 6 öncü + 100 sivil için 106 kişilik kapasite, 10 dakika/tick, 180 simülasyon günü/deneme, 90 gerçek günlük açık çalışma, gezegen-kapsamlı RL ve yalnızca diyalog üreten LLM.
+
+**Proje türü:** Microsoft AI Innovators programı için 4 haftalık araştırma/mühendislik projesi
+**Amaç:** Gerçek ötegezegen/uydu verilerine dayalı, LLM destekli, RAG'lı hafızaya sahip çok-ajanlı bir hayatta kalma simülasyonu. Ajanlar rastgele seçilen gerçek bir gök cismine planlı bir öncü misyon olarak inerler, 100 kişilik ana koloni gemisi gelmeden önce hayatta kalmak ve yaşanabilir ortam kurmak için bilimsel sistemler (oksijen, su, enerji, barınak) inşa ederler. Emergent sosyal/işbirliği davranışı gözlemlenir ve gezegenler arası karşılaştırmalı analiz çıktısı üretilir.
+**Bütçe:** Sıfır bütçe. Tüm bileşenler ücretsiz tier kullanır.
+**Kritik tasarım ilkesi (güncel):** Deterministik fizik katmanı eylem maskelerini ve madde/enerji/sağlık sınırlarını uygular. Gezegen-kapsamlı RL; öncelik, görev dağılımı, vardiya, risk ve yapı sırasını öğrenir. LLM yalnızca diyalog/açıklama üretir; fiziksel durumu değiştiremez veya güvenlik maskesini aşamaz.
+
+---
+
+## 1. Genel Mimari Özeti
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     SİMÜLASYON DÜNYASI                        │
+│  (Procedural, sparse-state, gezegen-spesifik fizik kuralları) │
+│                                                                 │
+│   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
+│   │  Ajan 1  │  │  Ajan 2  │  │  Ajan 3  │  │  Ajan N  │    │
+│   │ (genom + │  │ (genom + │  │ (genom + │  │ (genom + │    │
+│   │ ihtiyaç +│  │ ihtiyaç +│  │ ihtiyaç +│  │ ihtiyaç +│    │
+│   │ envanter)│  │ envanter)│  │ envanter)│  │ envanter)│    │
+│   └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘    │
+│        │             │             │             │           │
+└────────┼─────────────┼─────────────┼─────────────┼───────────┘
+         │             │             │             │
+         ▼             ▼             ▼             ▼
+   ┌─────────────────────────────────────────────────────┐
+   │            ORKESTRASYON KATMANI                       │
+   │  Event-driven tetikleme → API key pool → LLM çağrısı  │
+   └────────────────────┬──────────────────────────────────┘
+                         │
+         ┌───────────────┼───────────────┐
+         ▼               ▼               ▼
+   ┌──────────┐   ┌──────────────┐  ┌──────────┐
+   │  Hafıza  │   │  Reflection  │  │   RAG    │
+   │ (vektör  │   │ (periyodik   │  │ (rol-bazlı│
+   │   DB)    │   │  özet)       │  │  corpus) │
+   └──────────┘   └──────────────┘  └──────────┘
+                         │
+                         ▼
+                ┌──────────────────┐
+                │ Gözlemci Arayüzü  │
+                │ (web dashboard +  │
+                │  analiz raporu)   │
+                └──────────────────┘
+```
+
+---
+
+## 2. Gezegen/Uydu Havuzu (Gerçek Veri)
+
+Simülasyon başında bu havuzdan **rastgele** bir gök cismi seçilir. Her biri JSON config dosyası olarak tutulur, kod bu dosyalara parametrik bağlıdır (yeni gezegen eklemek = yeni JSON, kod değişmez).
+
+| Gök Cismi | Yerçekimi | Yüzey Sıcaklığı | Atmosfer | Gün Döngüsü | Ana Tehlike | Zorluk |
+|---|---|---|---|---|---|---|
+| **Ross 128b** | ~1.0g | -60°C ile +20°C arası | Muhtemel, belirsiz yoğunluk | 9.9 Dünya günü | Minimal (en sakin yıldız) | ★★☆☆☆ |
+| **Kepler-442b** | ~1.3g | Ilıman (Dünya'nın %70 ışınımı) | Muhtemel | 112 Dünya günü/yıl | Yüksek yerçekimi yorgunluğu | ★★☆☆☆ |
+| **Teegarden's Star b** | ~1.0g | ~28°C (tahmini) | Belirsiz | 4.9 Dünya günü (çok kısa) | Orta düzey yıldız parlaması | ★★★☆☆ |
+| **TRAPPIST-1e** | 0.93g | -27°C ile -48°C | Muhtemelen ince/yok | Gel-git kilitli (sonsuz gün/gece) | Yıldız parlaması (flare) + aşırı ısı farkı | ★★★☆☆ |
+| **Proxima Centauri b** | ~1.1g | ~-39°C ortalama | Belirsiz/ince | Muhtemelen gel-git kilitli | Çok şiddetli flare + yüksek radyasyon | ★★★★★ |
+
+### Gezegen JSON şeması (örnek — TRAPPIST-1e):
+```json
+{
+  "id": "trappist-1e",
+  "display_name": "TRAPPIST-1e",
+  "gravity_g": 0.93,
+  "temp_day_c": -27,
+  "temp_night_c": -48,
+  "tidally_locked": true,
+  "atmosphere_present": false,
+  "atmosphere_composition": null,
+  "day_length_hours": null,
+  "solar_flux_relative_to_earth": 0.6,
+  "flare_events_per_80_days": 42,
+  "hazards": ["stellar_flare", "extreme_thermal_gradient", "thin_atmosphere"],
+  "world_generation": {
+    "type": "tidally_locked_gradient",
+    "substellar_point": "center",
+    "habitable_band": "terminator_ring"
+  },
+  "resource_modifiers": {
+    "water_ice": "night_side_only",
+    "minerals": "uniform",
+    "geothermal_potential": "low"
+  }
+}
+```
+Diğer 4 gezegen için aynı şema, farklı değerler ve `world_generation.type: "procedural_noise"` (gel-git kilitli olmayanlar için).
+
+---
+
+## 3. Dünya (World) Mimarisi
+
+- **Boyut:** Mantıksal olarak 2000×2000 birim, ama **hiçbir zaman tam dizi olarak belleğe alınmaz.**
+- **Üretim yöntemi:** Seed'li prosedürel fonksiyon (Perlin/Simplex noise veya gel-git kilitli gezegenler için merkeze-mesafe gradyanı). Herhangi bir `(x, y)` koordinatı için kaynak/biome **deterministik olarak anlık hesaplanır** — önceden üretilmiş harita yok.
+- **Sparse state:** Sadece değişen hücreler (kaynak tüketildi, yapı inşa edildi vb.) bir `dict`/key-value store'da tutulur. Değişmeyen hücreler her zaman noise fonksiyonundan hesaplanır.
+- **Görüş alanı (fog of war):** Her ajan sadece kendi çevresindeki sabit boyutlu bir pencereyi (örn. 15×15 birim) "görür". LLM'e giden context bu yüzden harita boyutundan bağımsız sabit kalır.
+- **Başlangıç senaryosu:** Tüm ajanlar bir "iniş modülü" etrafında kümelenmiş başlar. Öncü ekip, yörüngedeki koloni gemisinden planlı olarak inerek keşif ve hazırlık misyonuna başlar. Bu hem anlatı kancası hem de erken-evre etkileşimi garanti eden mühendislik kararı (2000×2000'de rastgele dağılırlarsa birbirlerini hiç bulamayabilirler).
+
+---
+
+## 4. Ajan İç Durumu
+
+### 4.1 Genom (sabit, doğuştan)
+Her ajan için doğuşta atanır, simülasyon boyunca değişmez:
+- `strength` (güç): taşıma kapasitesi, inşa hızı
+- `agility` (çabukluk): hareket hızı, kaçış başarısı
+- `endurance` (dayanıklılık): ihtiyaç tüketim hızını yavaşlatır
+- `perception` (algı): görüş menzili, tehlike erken algılama
+- `immunity` (bağışıklık): hastalık/radyasyon direnci
+
+### 4.2 Yetkinlik Vektörü (multidisipliner — beceri sistemi DEĞİL)
+**Önemli:** Bu bir RPG XP sistemi değildir, sabit bir profildir (CV'deki gibi). Her ajan 5 alanda 0-10 arası skora sahiptir:
+- `engineering` (mühendislik): yapı/crafting kalitesi ve hızı
+- `medical` (tıp): hastalık/yaralanma tedavisi, hijyen yönetimi önerileri
+- `physics` (fizik/bilim): gezegen tehlikelerini öngörme, enerji sistemi optimizasyonu
+- `botany_bio` (botanik/biyoloji): yiyecek kaynağı tespiti, organik malzeme işleme
+- `leadership_social` (liderlik/sosyal): müzakere, grup kararı, çatışma çözümü
+
+Her ajan multidisipliner: örnek profil `{engineering: 9, medical: 5, physics: 4, botany_bio: 3, leadership_social: 7}`. Tek bir "rol etiketi" yoktur — bu vektör hem LLM system promptuna hem RAG retrieval ağırlıklandırmasına girer.
+
+**Dağılım kuralı:** 6 ajanlık takımda her alanın en az bir ajanda 8+ olmasını sağla (yetkinlik boşluğu olmasın), ama hiçbir ajan tek-boyutlu olmasın (her ajanda en az 2 alan 5+).
+
+### 4.3 İhtiyaçlar (her tick azalır)
+- `hunger` (açlık), `thirst` (susuzluk), `energy` (enerji/uyku), `hygiene` (hijyen), `temperature_stress` (sıcaklık stresi)
+- `hygiene` düşükse: hastalık riski artar + yakındaki ajanlarda sosyal ceza (gerçekçilik için).
+- Tuvalet/yıkanma: agent en yakın su/atık noktasına gider, `hygiene` sıfırlanır. Ayrı sistem değil, mevcut ihtiyaç sayaçlarından biri.
+
+### 4.4 Envanter / Crafting
+- Hammaddeler: gezegene özel (buz, mineral, organik madde vb. — `resource_modifiers`'tan gelir).
+- Tarif tablosu (JSON, içerik genişleyebilir):
+```json
+{
+  "shelter_basic": {
+    "materials": {"wood_or_ice": 10, "fiber": 5},
+    "base_duration_ticks": 6,
+    "min_engineering": 0,
+    "effect": "reduces temperature_stress_gain by 50%"
+  },
+  "isru_o2_unit": {
+    "materials": {"metal": 15, "electronics": 8},
+    "base_duration_ticks": 20,
+    "min_engineering": 6,
+    "effect": "produces 6-10g O2/hour, requires ~300W input",
+    "real_world_reference": "NASA MOXIE"
+  }
+}
+```
+- **Başarı/başarısızlık mantığı — ZAR YOK:** Malzeme + süre yeterliyse yapı **her zaman tamamlanır**. Genom (`strength`, `agility`) ve yetkinlik (`engineering`) sadece **süreyi ve malzeme verimliliğini** ölçeklendirir (yüksek değer = daha hızlı, daha az israf). Başarısızlık sadece **dünyadaki gerçek bir olaya bağlı kesinti** olabilir (flare, fırtına, saldırı) — asla soyut bir olasılık zarı değildir.
+- Zorluk eğrisi tarif **tier**'inden gelir (basit barınak ucuz/hızlı, ISRU ünitesi pahalı/yavaş/yetkinlik eşiği gerektirir), rastgelelikten değil.
+
+### 4.5 Karar anında LLM'e giden özet (örnek)
+Ham değişkenler değil, tek satır kompakt özet:
+> "Açsın (hunger: 72/100), hijyenin düşük (hygiene: 30/100), mühendislik yetkinliğin yüksek (8/10), elinde 10 metal var, barınağın yok, gece yaklaşıyor (-48°C), 40m uzakta bir ajan barınak inşa ediyor."
+
+---
+
+## 5. Hafıza, RAG ve Reflection (öğrenme mekanizması)
+
+- **Hafıza:** Her eylem + sonucu vektör DB'ye (Chroma/FAISS) gömülü olarak yazılır. Retrieval: önem skoru + yenilik + güncel bağlamla benzerlik (Stanford "Generative Agents" makalesindeki retrieval formülüne benzer).
+- **Reflection:** Belirli aralıklarla (örn. her 20 tick) ham anılar LLM'e verilir, üst-seviye içgörüler çıkarılır ("Su kaynağı kuzeyde tükeniyor", "X ajanına güvenmiyorum, yemeğimi paylaşmadı") ve bunlar hafızaya geri yazılır. **Bu, "deneyimle gelişme" hissinin tek kaynağıdır — ayrı bir beceri/XP sistemi YOKTUR.**
+- **RAG corpus (rol/yetkinliğe göre filtrelenir):** Her yetkinlik alanı için ayrı bir bilgi tabanı (örn. mühendislik: yapı/malzeme/ISRU referansları; tıp: fizyoloji/ilk yardım; fizik: gezegen tehlike verisi). Ajanın retrieval'ı kendi yetkinlik skoruna göre ağırlıklanır: yüksek skor → derin/teknik kaynaklara erişim; düşük skor → ya erişemez ya da basitleştirilmiş özet alır. **Bu kasıtlı asimetri, ajanlar arası gerçekçi bağımlılık (biri diğerine danışma ihtiyacı) yaratır.**
+
+---
+
+## 6. Misyon ve Hedef Mimarisi (kolonizasyon hazırlığı)
+
+**Neden gerekli:** Saf event-driven tasarımda "hiçbir event tetiklenmezse ajan amaçsız kalır" riski var. Bunu önlemek için tüm ajanlar paylaşılan, somut, ölçülebilir bir **üst misyona** sahiptir: **Dünya'dan gelecek 100 kişilik insan kolonisi için ortamı yaşanabilir hale getirmek.** Event'ler bu misyona giden yolu kesintiye uğratan şeylerdir — misyonun kendisi değildir. Misyon olmadan event-driven tetikleme amaçsız kalır; misyon varlığı, "tetiklenecek bir şey yoksa ajan ne yapar" sorusunu ortadan kaldırır (her zaman ilerletilecek bir alt-hedef vardır).
+
+### 6.1 Koloni hazırlık alt-hedefleri (her biri ölçülebilir, gerçek tüketim verisine dayalı)
+
+100 kişilik koloni hedefi, gerçek insan tüketim/yaşam destek verisine dayanan hedef kapasitelere bölünür:
+
+| Alt-hedef | Hedef kapasite (100 kişi için) | Veri kaynağı |
+|---|---|---|
+| Oksijen üretimi | ~55-65 kg O2/gün | İnsan O2 tüketimi ~550-650g/kişi/gün (NASA/MOXIE referansı) |
+| Su üretimi/depolama | ~1.000-2.500 L/gün | İçme + hijyen için kişi başı 10-25L/gün (NASA yaşam destek tahminleri) |
+| Gıda üretimi | ~200.000-250.000 kcal/gün toplam | Kişi başı 2.000-2.500 kcal/gün |
+| Barınak kapasitesi | 100 kişilik yaşam alanı | Modül başına kapasite × modül sayısı |
+| Enerji altyapısı | Yukarıdaki sistemlerin toplam W ihtiyacı | Sistem bazlı toplanır (örn. ISRU ünitesi ~300W) |
+| Tehlike koruması | Gezegenin `flare_events_per_80_days` değerine orantılı sığınak kapasitesi | Gezegen JSON config'inden |
+
+Bu tablo `colony_targets.json` olarak tutulur, gezegen config'inden gelen değerlerle (örn. flare sıklığı) parametrik bağlanır.
+
+### 6.2 Koloni Hazırlık Skoru
+Her alt-hedef için `mevcut_kapasite / hedef_kapasite` oranı hesaplanır, ortalaması **0-100% Koloni Hazırlık Skoru**'nu verir. Bu skor:
+- Ajanların stratejik katmanda hangi alt-hedefe öncelik vereceğine karar vermesi için kullanılır (en geride kalan alt-hedef önceliklenir).
+- Simülasyon sonunda **gezegenler arası karşılaştırmalı analizin ana metriğidir** (örn. "Ross 128b'de skor 340 tick'te %80'e ulaştı, Proxima'da flare'ler yüzünden 600 tick'te %45'te kaldı").
+
+### 6.3 Koloni gemisinin varışı — eşik-tetiklemeli (sabit zaman DEĞİL)
+Koloni gemisi sabit bir tick'te gelmez. Yörüngede bekler; **Koloni Hazırlık Skoru** önceden tanımlı bir eşiği (örn. %80) geçtiği anda iniş gerçekleşir ve simülasyon koşusu o anda doğal olarak sonlanır. Bu tercih bilinçli bir kapsam kararıdır:
+- **Karşılaştırma metriği netleşir:** Ana çıktı "eşiğe ulaşma süresi (tick)" olur — gezegenler arası doğrudan karşılaştırılabilir, ekstra yorum gerektirmeyen bir sayı.
+- **Demo anı:** Canlı izlerken eşiğe ulaşılıp gemi indiğinde doğal, görsel bir kapanış anı oluşur.
+- **Kapsam kontrolü:** "Hazır değilken gemi gelirse 100 yeni ajan ne yapar" sorusu (kriz/ölüm modellemesi) bu sürümün kapsamı dışında tutulur — 4 haftalık bütçeyi zorlayacak bir alt-sistem olurdu.
+- Eşik değeri ve gemi inmediği durumda simülasyonun maksimum tick sınırı (timeout) `colony_targets.json` içinde parametrik tutulur.
+
+## 7. Çoklu Ajan Orkestrasyonu ve Karar Döngüsü (İKİ KATMANLI — SAF EVENT-DRIVEN DEĞİL)
+
+### 7.0 Stratejik + Taktik katman ayrımı (ajanların her zaman bir amacı vardır)
+Saf event-driven yapı yerine **iki katmanlı karar döngüsü** kullanılır:
+- **Stratejik katman (hedef/plan):** Periyodik olarak (örn. her N tick) VEYA mevcut görev tamamlandığında VEYA bir koloni alt-hedefinde kilometre taşına ulaşıldığında tetiklenir. Ajan, Bölüm 6'daki koloni alt-hedeflerinden (en geride kalanı önceliklendirerek) kendi yetkinlik profiline göre bir sonraki somut görevi seçer (örn. "oksijen sistemi kritik, mühendislik yetkinliğim yüksek, metal toplamaya gidiyorum").
+- **Taktik katman (event-driven aksiyon):** Stratejik plan yürütülürken (yürüme, toplama gibi rutin eylemler) LLM çağrısı yapılmaz — basit deterministik yürütme kullanılır. LLM sadece şu durumlarda yeniden çağrılır (Bölüm 7.3'teki event listesi): ihtiyaç kritikleşirse, tehlike algılanırsa veya mevcut plan imkansız hale gelirse.
+
+**Sonuç:** "Event olmazsa ajan ne yapar?" sorusu ortadan kalkar — ajanın her zaman aktif bir stratejik görevi vardır (koloni hazırlığına hizmet eden), event'ler bu görevi kesintiye uğratan şeylerdir, görevin kendisi değildir.
+
+### 7.1 Model seçimi
+**Tek model seviyesi, tüm ajanlarda eşit zeka.** Ajanlar arası fark MODELDEN değil, system prompt'taki genom/yetkinlik/rol bilgisinden gelir.
+- **Birincil ve tek zorunlu sağlayıcı: Groq (Llama 3.3 70B)** — hızlı, tamamen ücretsiz, kart istemiyor. Plan bu tek sağlayıcı üzerine kurulu, ekstra bağımlılık yok.
+- **Gemini 2.5 Flash — OPSİYONEL, zorunlu değil:** Google AI Studio bazı kullanıcılarda/bölgelerde ücretsiz tarifede bile kart bağlama isteyebiliyor (rapor edilmiş gerçek deneyim). Bu yüzden plana zorunlu bağımlılık olarak eklenmiyor. Takımdan biri kart bağlamayı kabul ederse ek/yedek kapasite olarak kullanılabilir, ama mimari Gemini olmadan da tam çalışır.
+- 8B gibi küçük modeller kullanılmaz — tutarlı multidisipliner akıl yürütme için yetersiz kalır.
+
+### 7.2 API key havuzu
+- Her takım üyesi kendi ücretsiz Groq hesabını açar (kart gerekmez; rate limit organizasyon seviyesinde uygulanır, yani her hesap ayrı bir havuzdur).
+- Round-robin dağıtım: her LLM çağrısı sırada bekleyen bir sonraki key'e gider.
+- API anahtarı sayısı ekip büyüklüğüne bağlanmaz; mevcut anahtar havuzu oran limitlerine göre round-robin kullanılır. Fizik ve RL, LLM servisi olmadan da deterministik olarak çalışır.
+
+### 7.3 Event-driven tetikleme (taktik katman — KRİTİK optimizasyon)
+Stratejik plan yürütülürken her tick'te her ajana sorulmaz. Taktik katmanda LLM çağrısı sadece şu durumlarda tetiklenir:
+- Bir ihtiyaç kritik eşiğin altına düştüğünde
+- Yeni bir ajan/tehlike/kaynak algılandığında
+- Mevcut eylem tamamlandığında (yeni plan gerekli)
+- Reflection döngüsü zamanı geldiğinde
+
+Bu hem API bütçesini korur hem de gerçekçidir (insan da sabit aralıklarla değil, durum değiştiğinde yeniden düşünür).
+
+---
+
+## 8. Görselleştirme ve Çıktılar
+
+### 8.1 Canlı izleme (web dashboard)
+- Backend (Python/FastAPI) sim durumunu RAM'de tutar + SQLite'a checkpoint/log olarak yazar (Supabase/Firebase şimdilik gerekli değil — yalnızca makine kapalıyken de dışarıdan erişim isteniyorsa ileride eklenir, mevcut SQLite şeması buna uyumlu tutulur).
+- Frontend (Canvas/PixiJS, tek HTML dosyası) aynı FastAPI süreci tarafından WebSocket üzerinden canlı veriyle beslenir — ayrı bir hosting (GitHub Pages vb.) gerekmez.
+- "İniş raporu": sim başında seçilen gezegenin gerçek verileriyle kısa bir özet ekranı.
+- **Canlıya alma (opsiyonel, ileride):** Cloudflare Tunnel (`cloudflared`) ile yerel FastAPI süreci doğrudan özel alan adına (örn. `.com.tr`) bağlanabilir — ayrı sunucu/VPS kiralamaya gerek yok, kart/ücret gerektirmez. Domain Cloudflare nameserver'larına taşınır, tünel oluşturulur, subdomain backend'e yönlendirilir. Makinenin (veya tüneli çalıştıran cihazın) açık kalması gerekir.
+
+### 8.2 Analiz çıktısı (araştırma raporu — projenin asıl bilimsel değeri)
+Her gezegen profili için ayrı simülasyon koşusu, ardından karşılaştırmalı metrikler:
+- Ortalama hayatta kalma süresi
+- İşbölümünün ortaya çıkma hızı (kaç tick'te ajanlar farklı görevlere yöneldi)
+- Sosyal ağ yapısı (ittifak/çatışma grafiği — networkx ile görselleştirilebilir)
+- Kriz anında yetkinlik-bağımlılığı (kim kime kaç kez danıştı)
+- Gezegen zorluğu ile emergent davranış karmaşıklığı arasındaki ilişki
+
+---
+
+## 9. 4 Haftalık Plan
+
+| Hafta | Hedef |
+|---|---|
+| **1** | Procedural dünya üretimi (noise + gel-git kilitli gradyan) + sparse state + tek ajan + genom + ihtiyaç sistemi + temel hafıza (vektör DB) |
+| **2** | Çoklu ajan (6) + yetkinlik vektörü + multidisipliner sistem promptları + temel envanter/toplama + ajan-ajan etkileşim (yaklaşma, konuşma, takas) |
+| **3** | Crafting/inşa sistemi (deterministik, genom-ölçekli) + reflection mekanizması + rol-bazlı RAG corpus + event-driven tetikleme optimizasyonu |
+| **4** | Web dashboard (canlı izleme) + 5 gezegen için karşılaştırmalı koşular + analiz raporu + sunum hazırlığı |
+
+---
+
+## 10. Teknoloji Yığını (sıfır bütçe, kart gerektirmez)
+
+- **LLM:** Groq (Llama 3.3 70B, doğrudan API) — tek zorunlu sağlayıcı, kart istemez. Gemini 2.5 Flash opsiyonel/yedek (bazı kullanıcılarda Google AI Studio ücretsiz tarifede bile kart isteyebiliyor — zorunlu değil, kart bağlayan biri olursa eklenir)
+- **Vektör DB / RAG:** Chroma veya FAISS (lokal, ücretsiz)
+- **Durum/persistans:** SQLite (yerel dosya) — checkpoint ve log için yeterli; Supabase/Firebase yalnızca ileride "makine kapalıyken de erişim" istenirse eklenir, MVP için gerekli değil
+- **Compute:** Geliştiricilerin kendi laptopları (Colab gereksiz — model eğitimi yok, sürekli çalışan event-loop Colab'ın oturum zaman aşımına uygun değil)
+- **Backend + canlı dashboard:** Tek bir Python/FastAPI süreci — WebSocket ile aynı süreçten tarayıcıya canlı veri (ayrı statik hosting gerekmez, GitHub Pages kullanılmaz)
+- **Canlıya alma (opsiyonel, ileride):** Cloudflare Tunnel + özel alan adı (.com.tr) — ücretsiz, kart istemez, ayrı sunucu/VPS gerekmez
+- **Analiz:** Python (pandas, matplotlib/Plotly, networkx)
+
+---
+
+## 11. Açık Kalan Kararlar (Antigravity ajanlarının netleştirmesi/uygulaması gereken)
+
+- Tam tarif tablosu içeriği (kaç crafting tarifi, hangi tier'lar)
+- Vektör DB retrieval formülünün tam parametreleri (önem/yenilik/benzerlik ağırlıkları)
+- Dashboard'un tam görsel tasarımı (renk paleti, layout)
+- Sim hızı (1 tick = simüle edilen kaç dakika/saat?)
+- Ajan sayısı kesinleşmesi (5 mi sabit, yoksa 4-8 arası mı esnek?)
+- Koloni gemisinin "varış zamanı" sabit mi (örn. tick 500'de gelir, baskı yaratır) yoksa süre sınırsız mı? Stratejik katmanın tetikleme sıklığı (kaç tick'te bir) için varsayılan değer

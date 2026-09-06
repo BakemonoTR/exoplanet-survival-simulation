@@ -1,0 +1,105 @@
+{
+  "_meta": {
+    "description": "Operational readiness targets for the six-person advance crew plus 100 arriving civilians. Delivered emergency systems and uncommissioned prefab cargo receive no credit.",
+    "references": [
+      "NASA-STD-3001 — Human spaceflight crew health standards",
+      "NASA ECLSS — Environmental Control and Life Support System specifications",
+      "NASA MOXIE — Mars Oxygen In-Situ Resource Utilization Experiment",
+      "Drysdale et al. 2003 — Advanced life support sizing analysis"
+    ]
+  },
+  "population_target": 106,
+  "readiness_threshold_percent": 100,
+  "max_ticks": 51840,
+  "tick_duration_sim_minutes": 10,
+
+  "sub_targets": {
+    "oxygen_production": {
+      "display_name": "Oxygen Production System",
+      "description": "A conjunctive oxygen contract: commissioned, powered and water-fed generation plus separate settlement tankage for a thirty-day 106-person reserve. The precursor lander tank receives no readiness credit.",
+      "target_capacity_kg_per_day": 114.8,
+      "per_person_kg_per_day": 1.083,
+      "scientific_basis": "NASA OCHMO ECLSS sizing gives 1.083 kg O2/person/day including exercise. 106 occupants require 114.798 kg/day, rounded upward to 114.8 kg/day.",
+      "contributing_structures": ["isru_o2_unit", "oxygen_buffer_tank"],
+      "capacity_components": {
+        "oxygen_production": {
+          "target_capacity_kg_per_day": 114.8,
+          "contributing_structures": ["isru_o2_unit"]
+        },
+        "oxygen_storage": {
+          "target_capacity_kg": 3444.0,
+          "contributing_structures": ["oxygen_buffer_tank"]
+        }
+      },
+      "component_aggregation": "minimum",
+      "weight_in_score": 0.20
+    },
+    "water_supply": {
+      "display_name": "Water Supply System",
+      "description": "A conjunctive water contract: new water extraction replaces loop losses, separate wastewater hardware treats the gross hygiene and metabolic stream, and modular settlement tanks hold thirty days of configured external make-up. Purification never counts as extraction and the precursor lander tank earns no readiness credit.",
+      "target_capacity_liters_per_day": 2718.0,
+      "per_person_makeup_liters_per_day": 3.0,
+      "scientific_basis": "External make-up covers 318 L/day for 106 occupants plus 2,400 L/day crop-loop loss after 90% recovery across six 1,000 m2 farms. Separate wastewater hardware treats the 2,650 L/day crew hygiene and metabolic stream.",
+      "contributing_structures": ["water_collector", "water_purifier", "potable_water_tank"],
+      "capacity_components": {
+        "water_extraction": {
+          "target_capacity_liters_per_day": 2718.0,
+          "contributing_structures": ["water_collector"]
+        },
+        "water_recycling": {
+          "target_capacity_liters_per_day": 2650.0,
+          "contributing_structures": ["water_purifier"]
+        },
+        "water_storage": {
+          "target_capacity_liters": 81540.0,
+          "contributing_structures": ["potable_water_tank"]
+        }
+      },
+      "component_aggregation": "minimum",
+      "weight_in_score": 0.20
+    },
+    "food_production": {
+      "display_name": "Food Production System",
+      "description": "Mature, powered controlled-environment agriculture sized for the full diet of 106 occupants; a newly commissioned but unharvested farm receives no capacity credit.",
+      "target_capacity_kcal_per_day": 286200,
+      "per_person_kcal_per_day": 2700,
+      "scientific_basis": "The same 2,700 kcal/person/day planning allowance used for the active advance crew is retained for the operational settlement contract.",
+      "contributing_structures": ["greenhouse"],
+      "weight_in_score": 0.15
+    },
+    "shelter_capacity": {
+      "display_name": "Habitation Modules",
+      "description": "Pressurized, thermally regulated, radiation-shielded living space. Each module provides life support for a set number of occupants.",
+      "target_capacity_persons": 106,
+      "per_module_persons": 12,
+      "modules_needed": 9,
+      "scientific_basis": "NASA habitat concepts suggest ~8-12m² per person for extended habitation. Regolith-shielded modules provide radiation protection (2-3m regolith ≈ Earth-equivalent shielding).",
+      "contributing_structures": ["habitat_module"],
+      "weight_in_score": 0.15
+    },
+    "energy_infrastructure": {
+      "display_name": "Power Generation System",
+      "description": "Solar panel arrays, battery storage, and power distribution for all colony systems. Must cover O2 production, water processing, heating/cooling, lighting, and equipment.",
+      "target_capacity_kw": 18000,
+      "scientific_basis": "Six 1,000 m2 controlled farms draw 15.6 MW at the configured NASA BVAD lighting allocation. The 18 MW firm-service target adds habitat, ECLSS, water, communications and operating margin; solar recipe credit is derated below physical peak and includes finite storage.",
+      "contributing_structures": ["solar_panel"],
+      "weight_in_score": 0.15
+    },
+    "hazard_protection": {
+      "display_name": "Hazard Mitigation Systems",
+      "description": "The storm-safe section integrated into every commissioned, regolith-shielded habitat protects that habitat's twelve occupants from acute radiation events.",
+      "target_capacity_persons": 106,
+      "scaling_source": "planet_hazard_profile",
+      "scientific_basis": "Water and hydrogen-rich polymer lining plus local regolith overburden provide the required mass shielding. Integrating the refuge into each pressure habitat avoids a duplicate pressure hull and still requires physical installation and radiation acceptance before either score is awarded.",
+      "contributing_structures": ["habitat_module"],
+      "weight_in_score": 0.15
+    }
+  },
+
+  "score_calculation": {
+    "method": "weighted_average",
+    "formula": "sum(sub_target_score * weight) / sum(weights) * 100",
+    "sub_target_score": "min(current_capacity / target_capacity, 1.0)",
+    "notes": "Each sub-target is capped at 1.0 (building excess O2 doesn't compensate for missing water). The overall score represents balanced readiness across all systems."
+  }
+}

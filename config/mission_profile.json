@@ -1,0 +1,448 @@
+{
+  "schema_version": 2,
+  "mission_name": "ASAC-6 Emergency Civilian Colony Site Activation",
+  "scenario": {
+    "trigger": "The colony ship is damaged on arrival in the target planet system. Its degraded orbital life support can protect the remaining 100 people for approximately one year, forcing a surface landing on simulation day 360.",
+    "deployment": "The damaged ship immediately sends six astronauts and twenty-six uncrewed cargo landers to the surface. The cargo contains crated, non-operational cores, machines, consumables and spares rather than a functioning city.",
+    "crew_task": "The six astronauts must survey, extract local bulk resources, fabricate field-grade parts, assemble the landed cores, connect utilities, proof-test every system and sustain a thirty-day acceptance run before the other 100 people descend.",
+    "not_a_ready_city": true
+  },
+  "simulation_clock": {
+    "tick_minutes": 10,
+    "realtime_seconds_per_tick": 2.0,
+    "display_snapshot_seconds": 4.0,
+    "physics_ticks_per_display_snapshot": 2,
+    "public_challenge_days": 90,
+    "planet_attempt_max_earth_days": 360,
+    "stagnation_timeout_ticks": null,
+    "civilian_support_window_days": 30
+  },
+  "population": {
+    "advance_crew": 6,
+    "arriving_civilians": 100,
+    "advance_crew_departure_planned": false,
+    "operational_support_population": 106,
+    "description": "The damaged colony ship sends six astronauts to activate the surface site while 100 people remain aboard on degraded orbital life support. The six remain after the forced day-360 landing, so readiness covers 106 occupants; the arriving group is not treated as a second construction crew during preparation."
+  },
+  "advance_crew_consumables": {
+    "design_days": 360,
+    "potable_water_l": 10000.0,
+    "oxygen_kg": 1814.4,
+    "oxygen_buffer_capacity_kg": 2000.0,
+    "food_kcal": 5832000.0,
+    "basis": {
+      "habitat_water_l_per_person_day": 2.5,
+      "planned_eva_water_l_per_person_day": 1.0,
+      "lander_ogs_net_water_l_per_day": 2.835,
+      "packaging_and_contingency_fraction": 0.15,
+      "oxygen_kg_per_person_day": 0.84,
+      "food_kcal_per_person_day": 2700
+    },
+    "notes": "Packaged 360-day abort-and-survival water covers 2.5 L/person/day habitat turnover, a planned 1.0 L/person/day EVA increment, the lander OGS net water loss and a 15% contingency/packaging margin (rounded to 10,000 L). Recycling and commissioned ISRU extend margin. These consumables never contribute to the 106-person colony readiness contract."
+  },
+  "advance_crew_power": {
+    "battery_capacity_kwh": 120.0,
+    "initial_charge_kwh": 60.0,
+    "integrated_lander_solar_peak_kw": 18.0,
+    "auxiliary_fuel_cell_power_kw": 6.0,
+    "auxiliary_reactant_energy_kwh": 288.0,
+    "emergency_battery_reserve_fraction": 0.2,
+    "notes": "The lander's deployed 18 kW solar array charges its 120 kWh battery but does not count toward colony readiness. A finite 6 kW / 288 kWh fuel-cell reserve starts only to protect the final 20% battery reserve; it is not a hidden continuous generator."
+  },
+  "decision_authority": {
+    "physics_kernel": "authoritative",
+    "rl_policy": "selects_validated_actions",
+    "language_model": "dialogue_only",
+    "language_model_may_mutate_state": false,
+    "language_model_may_bypass_action_masks": false
+  },
+  "production_policy": {
+    "model": "hybrid_prefab_isru_emergency_activation",
+    "local_manufacturing_scope": "all local civil works and shielding plus the final approximately fifteen percent of standard truss, pipe, cable, pressure, fastener and integration stock; the field shop also covers rework and replacement demand",
+    "delivered_field_stock_basis": "Eighty-five percent of the worst-planet standard assembly BOM is landed as finite, non-operational, locally reproducible parts. This removes an implausible from-ore critical path without providing a ready structure or any readiness credit.",
+    "delivered_only_materials": [
+      "qualified_pv_blanket_segment",
+      "fluoroelastomer_seal_stock",
+      "qualified_control_board_core",
+      "electrical_copper_stock",
+      "eva_suit_life_support_core",
+      "laboratory_instrument_core",
+      "pharmaceutical_reagent_pack",
+      "pump_motor_bearing_core",
+      "pem_membrane_electrode_core",
+      "crop_seed_nutrient_pack",
+      "solar_tracking_drive_core",
+      "power_conditioning_unit_core",
+      "emergency_beacon_parts",
+      "preintegrated_cea_module_segment",
+      "preintegrated_habitat_core",
+      "integrated_habitat_storm_vault_liner",
+      "qualified_grid_storage_module",
+      "landing_navigation_core",
+      "crew_rover_service_module",
+      "excavator_service_module",
+      "assembly_robot_service_module",
+      "cargo_transporter_service_module",
+      "qualified_potable_water_tank_liner",
+        "qualified_lox_tank_core",
+        "qualified_composite_resin_pack"
+    ],
+    "rule": "Delivered-only flight-qualified cores are finite serialized cargo and can never be gathered, refined or recreated by the field shop. Empty stock makes dependent construction physically infeasible.",
+    "readiness_rule": "Crated cores provide zero readiness until local civil work, integration, proof testing and commissioning are complete."
+  },
+  "arrival_contract": {
+    "required_colony_score_percent": 100.0,
+    "operational_support_population": 106,
+    "infrastructure_complete_by_day": 330,
+    "required_continuous_soak_days": 30,
+    "requires_balanced_categories": true,
+    "requires_communications_array": true,
+    "requires_operational_landing_zone": true,
+    "requires_thirty_day_support_model": true
+  },
+  "cargo_architecture": {
+    "uncrewed_cargo_landers": 26,
+    "rated_payload_kg_each": 100000.0,
+    "total_delivered_payload_ceiling_kg": 2600000.0,
+    "packaging_restraint_fraction": 0.05,
+    "readiness_credit_on_delivery": false,
+    "notes": "Cargo is predeployed as finite serialized subassemblies, not an operational city. Every credited asset still requires local bulk material, transport, supervised assembly, hookups, proof testing and commissioning."
+  },
+  "crew_lander_architecture": {
+    "payload_ceiling_kg": 50000.0,
+    "integrated_life_support_power_and_tankage_kg": 18000.0,
+    "crew_suits_tools_medical_and_personal_kg": 6000.0,
+    "packaged_food_energy_density_kcal_per_kg": 4000.0,
+    "notes": "The six-person crew lander payload is audited separately from the twenty-six uncrewed 100 t cargo landers. Vehicle dry mass and descent propellant are outside rated delivered payload."
+  },
+  "surface_scale": {
+    "grid_cell_meters": 100.0
+  },
+  "crew_surface_mobility": {
+    "routine_suited_walk_kph": 2.4,
+    "planned_expedition_walk_kph": 2.4,
+    "rl_surge_speed_multiplier": 1.5,
+    "rl_surge_metabolic_multiplier": 1.5,
+    "basis": "The nominal gait is calibrated to NASA suited traverse measurements and is reduced at runtime by gravity, terrain, visibility, load and physiology. A learned surge is permitted only inside a projected route-end reserve envelope and increases metabolic demand through the same physiology model.",
+    "source_urls": [
+      "https://ntrs.nasa.gov/api/citations/20110001417/downloads/20110001417.pdf?attachment=true",
+      "https://ntrs.nasa.gov/api/citations/20205008200/downloads/EVA-EXP-0042%20xEVA%20System%20Con%20Ops%20Rev%20B%20Final%20dtd%2010192020_REF%20DOC.pdf",
+      "https://ntrs.nasa.gov/api/citations/20170002574/downloads/20170002574.pdf"
+    ]
+  },
+  "delivered_industry": {
+    "stone_furnace_count": 2,
+    "stone_furnace_unit_mass_kg": 8000.0,
+    "forge_count": 2,
+    "forge_unit_mass_kg": 6000.0,
+    "cnc_fabricator_count": 3,
+    "cnc_fabricator_unit_mass_kg": 12000.0,
+    "automation": {
+      "autonomous_batch_control": true,
+      "human_setup_minutes": 10.0,
+      "human_unload_inspection_minutes": 10.0,
+      "basis": "The delivered enclosed cells use qualified closed-loop recipe controls and interlocks. A crew operator loads and verifies a bounded program, the machine executes the unchanged physical batch duration without continuous attendance, and a qualified operator unloads and inspects the result before inventory credit. Materials and full batch energy remain committed exactly once at start."
+    },
+    "capabilities": {
+      "stone_furnace": ["ore_reduction", "glass_melting"],
+      "forge": ["hot_forming", "welding", "brazing"],
+      "cnc_fabricator": ["cnc_machining", "tube_fabrication", "polymer_molding", "composite_lamination", "heated_extrusion", "vacuum_casting", "thermal_cycle_acceptance", "electronics_clean_bench", "assembly_test", "proof_test"]
+    },
+    "notes": "Two induction furnaces, two hot-work cells and three enclosed multi-process CNC/clean-assembly cells are separate physical machines. One machine ID can run only one batch at a time. The third CNC closes the one-year fabrication critical path while remaining inside the 26-lander's audited payload ceiling."
+  },
+  "delivered_precision_stock": {
+    "qualified_pv_blanket_segment": {
+      "quantity": 46800,
+      "unit_mass_kg": 8.0,
+      "serialized": true,
+      "source_url": "https://www.nasa.gov/wp-content/uploads/2024/09/9-reticular-solar-arrays-spec-sheet-508.pdf"
+    },
+    "fluoroelastomer_seal_stock": {
+      "quantity": 1000,
+      "unit_mass_kg": 1.0,
+      "serialized": true,
+      "source_url": "https://standards.nasa.gov/standard/NASA/NASA-STD-6016"
+    },
+    "qualified_control_board_core": {
+      "quantity": 500,
+      "unit_mass_kg": 0.8,
+      "serialized": true,
+      "source_url": "https://standards.nasa.gov/standard/NASA/NASA-STD-8739-1"
+    },
+    "electrical_copper_stock": {
+      "quantity": 240,
+      "unit_mass_kg": 7.5,
+      "serialized": true,
+      "source_url": "https://standards.nasa.gov/standard/NASA/NASA-STD-8739-4",
+      "notes": "Includes fourteen feedstock units for a fifth utility vault if surveyed pipe length exceeds the four-vault port-based plan. Wire and harness fabrication, installation and testing remain local work."
+    },
+    "eva_suit_life_support_core": {
+      "quantity": 6,
+      "unit_mass_kg": 8.5,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/api/citations/20210024855/downloads/BVAD_2.15.22-final.pdf"
+    },
+    "laboratory_instrument_core": {
+      "quantity": 2,
+      "unit_mass_kg": 30.0,
+      "serialized": true,
+      "source_url": "https://standards.nasa.gov/standard/NASA/NASA-STD-8739-1"
+    },
+    "pharmaceutical_reagent_pack": {
+      "quantity": 24,
+      "unit_mass_kg": 0.8,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/api/citations/20210024855/downloads/BVAD_2.15.22-final.pdf"
+    },
+    "pump_motor_bearing_core": {
+      "quantity": 50,
+      "unit_mass_kg": 14.0,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/citations/20120006581"
+    },
+    "pem_membrane_electrode_core": {
+      "quantity": 22,
+      "unit_mass_kg": 30.0,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/api/citations/20180006265/downloads/20180006265.pdf"
+    },
+    "crop_seed_nutrient_pack": {
+      "quantity": 120,
+      "unit_mass_kg": 20.0,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/citations/20205008786"
+    },
+    "solar_tracking_drive_core": {
+      "quantity": 104,
+      "unit_mass_kg": 12.0,
+      "serialized": true,
+      "source_url": "https://www.nasa.gov/wp-content/uploads/2024/09/9-reticular-solar-arrays-spec-sheet-508.pdf"
+    },
+    "power_conditioning_unit_core": {
+      "quantity": 108,
+      "unit_mass_kg": 12.0,
+      "serialized": true,
+      "source_url": "https://www.nasa.gov/wp-content/uploads/2024/09/9-reticular-solar-arrays-spec-sheet-508.pdf"
+    },
+    "emergency_beacon_parts": {
+      "quantity": 1,
+      "unit_mass_kg": 5.0,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/api/citations/19930008975/downloads/19930008975.pdf"
+    },
+    "preintegrated_cea_module_segment": {
+      "quantity": 24,
+      "unit_mass_kg": 31472.05,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/api/citations/20210024855/downloads/BVAD_2.15.22-final.pdf",
+      "notes": "Four independently restrained, transportable pressure/CEA segments form one 1,000 m2 greenhouse. No landed item exceeds the 35 t surface transporter deck limit or a 100 t cargo-lander payload."
+    },
+    "preintegrated_habitat_core": {
+      "quantity": 9,
+      "unit_mass_kg": 32000.0,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/citations/20190000494"
+    },
+    "integrated_habitat_storm_vault_liner": {
+      "quantity": 9,
+      "unit_mass_kg": 5000.0,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/citations/20130009378",
+      "notes": "One transportable water/polyethylene shielding liner is integrated into each twelve-person habitat; the nine liners replace three duplicate stand-alone pressure shelters at the same total delivered mass."
+    },
+    "qualified_grid_storage_module": {
+      "quantity": 26,
+      "unit_mass_kg": 30000.0,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/citations/20220004165"
+    },
+    "landing_navigation_core": {
+      "quantity": 1,
+      "unit_mass_kg": 500.0,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/api/citations/19930008975/downloads/19930008975.pdf"
+    },
+    "crew_rover_service_module": {
+      "quantity": 4,
+      "unit_mass_kg": 80.0,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/citations/20120006581"
+    },
+    "excavator_service_module": {
+      "quantity": 60,
+      "unit_mass_kg": 25.0,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/citations/20120006581"
+    },
+    "assembly_robot_service_module": {
+      "quantity": 12,
+      "unit_mass_kg": 45.0,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/citations/20120006581"
+    },
+    "cargo_transporter_service_module": {
+      "quantity": 4,
+      "unit_mass_kg": 25.0,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/citations/20120006581"
+    },
+    "qualified_potable_water_tank_liner": {
+      "quantity": 6,
+      "unit_mass_kg": 350.0,
+      "serialized": true,
+      "source_url": "https://standards.nasa.gov/standard/NASA/NASA-STD-6016"
+    },
+    "qualified_lox_tank_core": {
+      "quantity": 2,
+      "unit_mass_kg": 1800.0,
+      "serialized": true,
+      "source_url": "https://ntrs.nasa.gov/citations/20170009550"
+    },
+    "qualified_composite_resin_pack": {
+      "quantity": 432,
+      "unit_mass_kg": 1.8,
+      "serialized": true,
+      "source_url": "https://standards.nasa.gov/standard/NASA/NASA-STD-6016",
+      "notes": "Prequalified low-outgassing thermoset resin and hardener for the limited field-made composite-panel fraction; it is not synthesized from planetary carbon. Includes six packs for local fabrication of the fifth utility vault's integration parts."
+    }
+  },
+  "delivered_field_stock": {
+    "machined_bolts_fasteners": {"quantity": 23433, "unit_mass_kg": 0.2},
+    "structural_truss_section": {
+      "quantity": 1411,
+      "unit_mass_kg": 41.0,
+      "notes": "This is 85% of the direct 106-person mission truss BOM. The landed forges form and weld the remaining share from local iron while preserving a bounded one-year critical path."
+    },
+    "power_cable_harness": {"quantity": 626, "unit_mass_kg": 18.0},
+    "rope_cordage": {"quantity": 448, "unit_mass_kg": 3.0},
+    "electronic_component": {"quantity": 454, "unit_mass_kg": 0.8},
+    "insulated_fabric": {"quantity": 419, "unit_mass_kg": 1.5},
+    "metal_pipe": {
+      "quantity": 4988,
+      "unit_mass_kg": 3.5,
+      "notes": "Approximately 85% of the 5,868 pressure-tube units directly required by four three-circuit utility vaults and the full 106-person capacity build is delivered as inspected prefab stock; the remaining direct share and downstream subassembly demand are made by the landed shop."
+    },
+    "vacuum_gasket_seal": {"quantity": 769, "unit_mass_kg": 0.25},
+    "composite_panel": {"quantity": 259, "unit_mass_kg": 12.0},
+    "pressure_vessel_section": {"quantity": 220, "unit_mass_kg": 64.0},
+    "glass_pane": {"quantity": 92, "unit_mass_kg": 4.0},
+    "thermal_control_loop": {"quantity": 89, "unit_mass_kg": 55.0},
+    "pump_compressor_module": {"quantity": 58, "unit_mass_kg": 36.0},
+    "electrolysis_stack": {"quantity": 17, "unit_mass_kg": 52.0},
+    "reduced_iron_ingot": {"quantity": 327, "unit_mass_kg": 5.0},
+    "finned_heat_sink": {"quantity": 2, "unit_mass_kg": 8.0}
+  },
+  "delivered_structure_kits": {
+    "solar_panel": 1
+  },
+  "conditional_feedstocks_if_planet_absent": {},
+  "surface_fleet": {
+    "crew_rover": {
+      "count": 1,
+      "dry_mass_kg": 2500.0,
+      "crew_seats": 2,
+      "payload_kg": 490.0,
+      "max_speed_kph": 10.0,
+      "walkback_limit_km": 7.6,
+      "pressurized": false,
+      "battery_capacity_kwh": 30.0,
+      "traction_energy_kwh_per_km": 1.2,
+      "charge_power_kw": 5.0,
+      "charge_efficiency": 0.90,
+      "reserve_fraction": 0.30,
+      "slope_limit_deg": 20.0,
+      "condition_loss_per_km": 0.0005,
+      "service_condition_threshold": 0.75,
+      "service_restore_condition": 0.98,
+      "service_module_material": "crew_rover_service_module",
+      "capabilities": ["two_person_eva_transport", "light_sample_transport"],
+      "prohibited_roles": ["autonomous_excavation", "structural_assembly", "heavy_module_transport", "pressure_system_commissioning"]
+    },
+    "excavator": {
+      "count": 4,
+      "design_basis": "Autonomous paired bucket-wheel excavation and haul unit; RASSOR-derived digging head on a dedicated battery haul carrier",
+      "dry_mass_kg": 1600.0,
+      "payload_kg": 1000.0,
+      "nominal_loose_regolith_kg_per_day": 2700.0,
+      "travel_speed_kph": 5.0,
+      "battery_capacity_kwh": 30.0,
+      "minimum_dispatch_charge_fraction": 0.80,
+      "return_reserve_fraction": 0.25,
+      "charge_efficiency": 0.90,
+      "charge_power_kw": 6.0,
+      "excavation_power_kw": 2.0,
+      "travel_power_kw": 3.0,
+      "unload_minutes": 20,
+      "cooldown_minutes": 30,
+      "inspection_minutes": 20,
+      "maximum_slope_deg": 15.0,
+      "requires_verified_exposed_face": true,
+      "hard_rock_capable": true,
+      "hard_rock_attachment": "replaceable low-reaction percussive ripper and jaw-crusher head",
+      "excavation_rate_multipliers": {
+        "regolith": 1.0,
+        "water_ice": 0.60,
+        "silica_sand": 0.60,
+        "graphite": 0.70,
+        "sulfur": 0.70,
+        "iron_ore": 0.35,
+        "chalcopyrite_ore": 0.30,
+        "basalt": 0.25
+      },
+      "condition_loss_per_excavated_kg": 0.000005,
+      "dust_gain_per_excavated_kg": 0.0001,
+      "service_condition_threshold": 0.75,
+      "service_restore_condition": 0.98,
+      "service_module_material": "excavator_service_module",
+      "capabilities": ["excavate_verified_exposed_face", "onboard_bulk_regolith_haul", "unload_at_landing_depot"],
+      "prohibited_roles": ["geological_discovery", "precision_assembly", "heavy_prefab_transport", "pressure_or_electrical_commissioning"]
+    },
+    "assembly_robot": {
+      "count": 4,
+      "design_basis": "Human-supervised modular surface assembly robot",
+      "dry_mass_kg": 480.0,
+      "payload_kg": 500.0,
+      "travel_speed_kph": 3.0,
+      "battery_capacity_kwh": 20.0,
+      "charge_power_kw": 4.0,
+      "charge_efficiency": 0.90,
+      "travel_power_kw": 2.0,
+      "return_reserve_fraction": 0.20,
+      "operating_power_kw": 2.0,
+      "construction_equivalent_workers": 1.5,
+      "max_supervised_per_crew": 2,
+      "requires_onsite_supervisor": true,
+      "condition_loss_per_operating_hour": 0.0002,
+      "condition_loss_per_km": 0.0005,
+      "dust_gain_per_operating_hour": 0.001,
+      "service_condition_threshold": 0.75,
+      "service_restore_condition": 0.98,
+      "service_module_material": "assembly_robot_service_module",
+      "capabilities": ["position_sub_500kg_components", "deploy_flexible_blankets", "hold_and_fastening_assist", "place_regolith_shielding"],
+      "prohibited_roles": ["excavation", "ore_harvest", "heavy_prefab_transport", "independent_pressure_or_electrical_commissioning"],
+      "notes": "Robots move and hold sub-500 kg standardized components, deploy blankets and place shielding. They cannot excavate, move multi-tonne prefab segments, or commission pressure, ECLSS, power or landing systems without an on-site crew member."
+    },
+    "cargo_transporter": {
+      "count": 2,
+      "design_basis": "Low-speed autonomous modular platform transporter dedicated to landed pallets and pressure-module segments; it cannot excavate, assemble, inspect or commission structures",
+      "dry_mass_kg": 5000.0,
+      "payload_kg": 35000.0,
+      "travel_speed_kph": 3.0,
+      "battery_capacity_kwh": 120.0,
+      "charge_power_kw": 20.0,
+      "charge_efficiency": 0.90,
+      "travel_power_kw": 20.0,
+      "unloading_power_kw": 5.0,
+      "unload_minutes": 30,
+      "return_reserve_fraction": 0.20,
+      "condition_loss_per_km": 0.0004,
+      "condition_loss_per_trip": 0.0005,
+      "service_condition_threshold": 0.75,
+      "service_restore_condition": 0.98,
+      "service_module_material": "cargo_transporter_service_module",
+      "capabilities": ["restrained_heavy_module_transport", "powered_deck_unloading"],
+      "prohibited_roles": ["excavation", "geological_survey", "structural_assembly", "pressure_or_electrical_commissioning", "crew_transport"],
+      "notes": "Payloads are discrete restrained modules. The transporter performs several conserved trips for a greenhouse or solar field; no astronaut backpack or assembly robot is treated as a heavy hauler."
+    }
+  }
+}

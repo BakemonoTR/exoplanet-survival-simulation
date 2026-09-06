@@ -1,0 +1,18 @@
+# Core
+fastapi>=0.104.0
+uvicorn>=0.24.0
+websockets>=12.0
+pydantic>=2.0.0
+
+# LLM
+groq>=0.4.0
+
+# Embedding
+sentence-transformers>=2.2.0
+numpy>=1.24.0
+
+# World generation
+noise>=1.2.2
+
+# Database
+aiosqlite>=0.19.0

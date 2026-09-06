@@ -1,0 +1,187 @@
+{
+  "id": "ross-128b",
+  "display_name": "Ross 128 b",
+  "epistemic_model": {
+    "classification": "scenario-constrained synthetic surface realization",
+    "observed_parameters": ["radial-velocity orbital period", "minimum mass"],
+    "inferred_parameters": ["radius", "bulk density", "gravity", "equilibrium temperature"],
+    "scenario_assumptions": ["rotation state", "surface pressure and composition", "surface temperature cycle", "geology", "biomes and mineral deposits", "surface radiation dose"],
+    "uncertainty_policy": "Unobserved surface properties are deterministic scenario priors for reproducible RL experiments, not measured facts."
+  },
+  "star": {
+    "name": "Ross 128",
+    "type": "M4V red dwarf",
+    "mass_solar": 0.168,
+    "luminosity_solar": 0.00362,
+    "distance_ly": 11.007,
+    "age_gyr": 9.45
+  },
+  "orbital": {
+    "semi_major_axis_au": 0.0496,
+    "orbital_period_days": 9.8656,
+    "eccentricity": 0.036
+  },
+  "physical": {
+    "mass_earth": 1.40,
+    "radius_earth": 1.10,
+    "gravity_g": 1.16,
+    "density_gcc": 5.8,
+    "escape_velocity_kms": 11.8
+  },
+  "surface": {
+    "tidally_locked": false,
+    "day_length_hours": 236.8,
+    "temp_day_c": 20,
+    "temp_night_c": -60,
+    "equilibrium_temp_k": 280,
+    "solar_flux_relative_to_earth": 1.38
+  },
+  "atmosphere": {
+    "present": true,
+    "composition": {"N2": 0.70, "CO2": 0.22, "Ar": 0.03, "O2": 0.03, "H2O": 0.02},
+    "composition_notes": "N2-CO2 dominated. Quiet M dwarf = good atmospheric retention. Trace O2 from photolysis. Mean molecular weight ~0.032 kg/mol.",
+    "o2_fraction": 0.03,
+    "surface_pressure_atm": 0.8,
+    "notes": "Ross 128 is one of the quietest M dwarfs known. This makes atmospheric retention more probable. Moderate pressure atmosphere."
+  },
+  "geology": {
+    "bulk_composition": "Iron-rich core (possibly larger proportional core than Earth due to elevated Fe/Si ratio), silicate mantle with olivine and pyroxene",
+    "core_type": "Large iron-rich core (~35% by mass)",
+    "mantle_minerals": ["olivine", "pyroxene", "garnet", "perovskite"],
+    "surface_minerals": ["basalt", "granite_analog", "iron_oxide", "clay_silicate", "carbonate"],
+    "tectonic_activity": "Low — old planet (9.45 Gyr), likely cooled mantle, minimal plate tectonics. Possible ancient volcanic calderas.",
+    "volcanism": "Extinct or very rare — localized geothermal remnants possible"
+  },
+  "hazards": ["dust_storm", "long_night_cold"],
+  "flare_profile": {
+    "flare_events_per_80_days": 0.5,
+    "average_flare_energy_erg": 1e28,
+    "superflare_probability_per_year": 0.001,
+    "uv_flux_relative_to_earth": 0.3,
+    "radiation_baseline_sv_per_hour": 0.000002,
+    "radiation_flare_sv_per_hour": 0.0002,
+    "notes": "Ross 128 is remarkably quiet for an M dwarf. Near-zero flare activity makes this the most radiation-safe planet in the set. The primary challenge is the long day/night cycle (9.86 Earth days), not radiation."
+  },
+  "radiation_system": {
+    "enabled": true,
+    "model_status": "scenario_prior_not_surface_measurement",
+    "baseline_dose_sv_per_hour": 0.000002,
+    "basis": "The modeled 0.8 atm atmosphere attenuates the quiet M-dwarf particle environment, but atmospheric column and magnetic shielding are unobserved; this is a conservative mission prior."
+  },
+  "world_generation": {
+    "type": "procedural_noise",
+    "noise_octaves": 6,
+    "noise_persistence": 0.5,
+    "noise_lacunarity": 2.0,
+    "elevation_range": [0, 100],
+    "map_size": 2000
+  },
+  "biomes": [
+    {
+      "id": "mineral_highlands",
+      "name": "Mineral Highlands",
+      "description": "Elevated terrain exposing ancient igneous and metamorphic rock formations. Billions of years of geological quiescence have left mineral veins intact and accessible near the surface. Iron-rich with oxidized surface giving a reddish-brown color. Wind-sculpted ridges and exposed cliff faces.",
+      "temp_range_c": [-30, 5],
+      "zone": "elevation_high",
+      "traversable": true,
+      "survival_time_ticks_unprotected": null,
+      "resources": {
+        "iron_ore": "rich",
+        "silica_sand": "rich",
+        "chalcopyrite_ore": "sparse",
+        "olivine": "moderate",
+        "regolith": "moderate"
+      },
+      "hazard_modifiers": {
+        "wind_speed_modifier": 1.8,
+        "movement_speed_modifier": 0.7
+      }
+    },
+    {
+      "id": "temperate_plains",
+      "name": "Temperate Plains",
+      "description": "Wide, relatively flat terrain with a thin layer of weathered regolith over carbonate-rich bedrock. The most hospitable biome — temperatures are manageable during the long day, and the open terrain allows efficient movement. Scattered clay deposits suggest ancient water activity. Primary landing zone.",
+      "temp_range_c": [-10, 20],
+      "zone": "elevation_mid",
+      "traversable": true,
+      "survival_time_ticks_unprotected": null,
+      "resources": {
+        "regolith": "abundant",
+        "calcite": "moderate",
+        "graphite": "sparse",
+        "silica_sand": "sparse"
+      },
+      "hazard_modifiers": {
+        "wind_speed_modifier": 1.1
+      }
+    },
+    {
+      "id": "frozen_valleys",
+      "name": "Frozen Valleys",
+      "description": "Deep topographic depressions where cold air pools during the 118-hour night. Water ice accumulates in these natural cold traps — the primary water source on this planet. Walls of the valleys expose layered sedimentary rock with carbonate mineral veins.",
+      "temp_range_c": [-60, -20],
+      "zone": "elevation_low",
+      "traversable": true,
+      "survival_time_ticks_unprotected": 20,
+      "resources": {
+        "water_ice": "abundant",
+        "calcite": "moderate",
+        "graphite": "sparse"
+      },
+      "hazard_modifiers": {
+        "movement_speed_modifier": 0.75
+      }
+    },
+    {
+      "id": "volcanic_vents",
+      "name": "Ancient Volcanic Vents",
+      "description": "Remnants of extinct volcanic systems. Dark basaltic rock surrounds collapsed calderas and fumarolic vents that still emit trace sulfurous gases from residual geothermal heat. Ancient hydrothermal circulation locally deposited copper-iron sulfides such as chalcopyrite; titanium and aluminium remain primarily bound in common silicate and oxide minerals.",
+      "temp_range_c": [30, 80],
+      "zone": "localized_volcanic",
+      "traversable": true,
+      "survival_time_ticks_unprotected": 30,
+      "resources": {
+        "sulfur": "abundant",
+        "basalt": "abundant",
+        "chalcopyrite_ore": "moderate",
+        "iron_ore": "moderate"
+      },
+      "hazard_modifiers": {
+        "toxic_exposure_probability_per_eva_hour": 0.01,
+        "ground_instability_injury_probability_per_eva_hour": 0.005
+      }
+    },
+    {
+      "id": "ice_fields",
+      "name": "Ice Fields",
+      "description": "Polar and permanently shaded regions where thick water ice deposits have accumulated over geological time. The ice is relatively pure H2O with embedded silicate dust. Surface is treacherous — smooth ice with hidden fissures. The largest water reserve on the planet.",
+      "temp_range_c": [-50, -30],
+      "zone": "polar",
+      "traversable": true,
+      "survival_time_ticks_unprotected": 16,
+      "resources": {
+        "water_ice": "abundant",
+        "silica_sand": "sparse"
+      },
+      "hazard_modifiers": {
+        "movement_speed_modifier": 0.6,
+        "crevasse_injury_probability_per_eva_hour": 0.003
+      }
+    }
+  ],
+  "resource_modifiers": {
+    "scarcity_factor": 0.8,
+    "water_ice": "valleys_and_polar",
+    "iron_ore": "highlands_concentrated",
+    "chalcopyrite_ore": "volcanic_hydrothermal",
+    "notes": "Most resource-abundant planet in the set. Resources distributed across biomes but not concentrated in lethal zones. The main challenge is logistics and the 9.86-day rotation creating long, cold nights."
+  },
+  "difficulty_rating": 1,
+  "difficulty_label": "Easy",
+  "scientific_references": [
+    "Bonfils et al. 2018 — Ross 128 b discovery (Astronomy & Astrophysics 613, A25)",
+    "Diaz et al. 2019 — Ross 128 stellar characterization and chemical abundances",
+    "Guinan et al. 2019 — Ross 128 UV/X-ray activity levels",
+    "Wandel 2018 — Habitability assessment of Ross 128 b"
+  ]
+}

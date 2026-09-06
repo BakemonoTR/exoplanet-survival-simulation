@@ -1,0 +1,2181 @@
+{
+  "_meta": {
+    "description": "Crafting recipes organized in 5 tiers (0-4) of increasing complexity. Tier 0 requires no tools. Tier 1+ requires tools. Tier 2+ requires refined intermediate materials. Physics is deterministic for a trial seed; completed structures must pass a seeded tolerance, inspection and commissioning gate, with bounded corrective rework when acceptance fails.",
+    "mechanics": {
+      "success": "Material staging permits work but not operation. Structures receive a reproducible acceptance score from engineering competence, assembly-robot condition and seeded component/workmanship tolerance; a failed check requires additional rework and retest before readiness credit.",
+      "duration_formula": "base_duration_ticks * (1 - 0.05 * engineering_score) * (1 - 0.03 * strength)",
+      "efficiency_formula": "material_cost * (1 - 0.08 * max(0, engineering_score - min_engineering))",
+      "interruption": "World events (flare, quake, storm) can pause construction. Resumes after event, no material loss unless structure takes damage.",
+      "tool_requirement": "Tier 0 uses bare hands/rocks. Tier 1+ requires multitool_kit or hand_tools. Advanced recipes may require prior structures.",
+      "multi_agent_bonus": "Each additional agent assisting reduces duration by 25% (max 2 assistants = 50% reduction). Assistants need min_engineering / 2.",
+      "maintenance": "Structures degrade over time. maintenance_interval_ticks and repair_materials define upkeep. Unmaintained structures lose effectiveness gradually.",
+      "quality_modifier": "engineering_score above min_engineering adds quality bonus: +5% effectiveness per extra point. Max +25% at 5 points above minimum."
+    },
+    "material_processing_chain": {
+      "description": "Raw materials must be processed into refined forms for Tier 2+ recipes. This creates a realistic production pipeline.",
+      "chain": [
+        "iron_ore → reduced_iron_ingot (requires stone_furnace)",
+        "silica_sand → glass_pane (requires stone_furnace)",
+        "qualified_composite_resin_pack + reduced_iron_ingot + glass_pane → composite_panel (requires cnc_fabricator)",
+        "elemental sulfur + graded regolith → optional sulfur-regolith paver (requires heated extrusion cell)",
+        "qualified_control_board_core → electronic_component (requires cnc_fabricator clean bench)",
+        "electrical_copper_stock → tested power/data harness (requires cnc_fabricator clean bench)"
+      ]
+    }
+  },
+  "recipes": {
+    "_comment_tier_0": "=== TIER 0: PRIMITIVE (no tools required) ===",
+    "stone_hammer": {
+      "tier": 0,
+      "display_name": "Stone Hammer",
+      "description": "A crude tool made by shaping basalt against harder rock. Enables basic gathering and construction. Inferior to multitool but can be made with bare hands.",
+      "materials": {
+        "basalt": 3,
+        "regolith": 1
+      },
+      "base_duration_ticks": 2,
+      "min_engineering": 0,
+      "requires_tool": false,
+      "requires_structure": null,
+      "output": {
+        "type": "item",
+        "item_id": "stone_hammer",
+        "effects": {
+          "gather_speed_multiplier": 0.8,
+          "craft_speed_multiplier": 0.7,
+          "durability_uses": 30
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "Oldowan-style lithic technology. Basalt fractures predictably, creating usable edges. Essential fallback if manufactured tools are lost or unavailable."
+    },
+    "windbreak": {
+      "tier": 0,
+      "requires_atmosphere": true,
+      "display_name": "Windbreak Wall",
+      "description": "A low wall of stacked regolith bags and basalt blocks that blocks wind from one direction. Reduces wind chill within a 4-unit radius behind the wall. No roof — provides zero radiation or precipitation protection.",
+      "materials": {
+        "regolith": 12,
+        "basalt": 6
+      },
+      "base_duration_ticks": 3,
+      "min_engineering": 0,
+      "requires_tool": false,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "windbreak",
+        "effects": {
+          "wind_reduction_factor": 0.3,
+          "effect_radius_units": 4,
+          "temperature_stress_reduction": 0.15
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "Basic field engineering. A 1.5m wall reduces wind speed by 50-70% in the lee zone. Used extensively in Antarctic field camps."
+    },
+    "_comment_tier_1": "=== TIER 1: BASIC SURVIVAL (requires tools) ===",
+    "basic_shelter": {
+      "tier": 1,
+      "display_name": "Basic Shelter",
+      "description": "A rudimentary two-person emergency refuge for the advance crew. It is not pressure-rated long-duration housing and never contributes to civilian-arrival readiness.",
+      "materials": {
+        "regolith": 30,
+        "basalt": 10
+      },
+      "base_duration_ticks": 12,
+      "min_engineering": 0,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "basic_shelter",
+        "capacity_persons": 2,
+        "effects": {
+          "temperature_stress_reduction": 0.5,
+          "wind_reduction_factor": 0.0,
+          "flare_damage_reduction": 0.3,
+          "rest_efficiency_bonus": 1.2
+        }
+      },
+      "colony_contribution": null,
+      "maintenance": {
+        "interval_ticks": 8640,
+        "repair_materials": {
+          "regolith": 5,
+          "basalt": 2
+        },
+        "degradation_per_missed_maintenance": 0.1
+      },
+      "real_world_basis": "Based on NASA regolith-bag construction concepts for emergency lunar shelters. Regolith provides thermal mass and modest radiation shielding (~10cm ≈ 5% dose reduction)."
+    },
+    "campfire": {
+      "tier": 1,
+      "display_name": "Retired Sulfur Combustion Heater",
+      "description": "Disabled legacy concept. Burning sulfur would consume nearly one kilogram of oxygen and create nearly two kilograms of toxic sulfur dioxide per kilogram of sulfur. The pressurized lander uses its qualified electrical thermal-control loop instead.",
+      "field_constructible": false,
+      "disabled_reason": "No oxidizer, toxic-offgas capture or flight-qualified reactor exists in the landed manifest.",
+      "materials": {},
+      "base_duration_ticks": 0,
+      "min_engineering": 0,
+      "requires_tool": false,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "campfire",
+        "effects": {
+          "deprecated": true
+        }
+      },
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=C7446095&Mask=20D",
+        "basis": "NIST gives standard gas-phase SO2 formation enthalpy near -296.8 kJ/mol; sulfur combustion is not a free vacuum heat source and requires an oxygen and toxic-offgas ledger.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "Retained only as a save-file-compatible disabled recipe identifier."
+    },
+    "life_support_distribution_grid": {
+      "tier": 2,
+      "display_name": "Utility Vault + Buried Water/Oxygen Spine",
+      "description": "A pressure-tested utility vault, pumps, isolation valves and a finite heat-traced buried campus spine. Physical routed branches connect water extractors, wastewater processors, oxygen plants, buffer tanks, habitats and greenhouses; the vault is a manifold, not radius-based fluid teleportation and the delivered topology is not credited as a redundant closed ring.",
+      "materials": {
+        "metal_pipe": 1350,
+        "structural_truss_section": 10,
+        "pump_compressor_module": 2,
+        "thermal_control_loop": 2,
+        "pressure_vessel_section": 4,
+        "power_cable_harness": 10,
+        "vacuum_gasket_seal": 80,
+        "machined_bolts_fasteners": 400,
+        "electronic_component": 8,
+        "regolith": 600
+      },
+      "base_duration_ticks": 3840,
+      "construction": {
+        "work_person_hours": 160,
+        "recommended_crew": 3,
+        "phases": ["route_survey", "utility_trenching", "pipe_and_valve_installation", "heat_trace_and_controls", "sectional_pressure_test", "burial_and_commissioning"]
+      },
+      "min_engineering": 5,
+      "requires_tool": true,
+      "requires_structure": null,
+      "manufacturing_operations": ["site_foundation", "pipework", "electrical_integration", "proof_test", "commissioning"],
+      "mass_budget_kg": {
+        "input_total_kg": 6759.4,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 6759.4,
+        "process_loss_kg": 0.0
+      },
+      "output": {
+        "type": "structure",
+        "structure_id": "life_support_distribution_grid",
+        "effects": {
+          "water_network_enabled": true,
+          "oxygen_network_enabled": true,
+          "service_radius_cells": 12,
+          "installed_line_length_m": 4500,
+          "installed_corridor_length_m": 4500,
+          "installed_tube_length_m": 13500,
+          "tube_length_per_metal_pipe_unit_m": 10,
+          "max_connected_endpoints": 16,
+          "isolated_fluid_circuits": 3,
+          "power_consumption_w": 5000
+        }
+      },
+      "colony_contribution": null,
+      "maintenance": {
+        "interval_ticks": 4032,
+        "repair_materials": {
+          "metal_pipe": 4,
+          "vacuum_gasket_seal": 4,
+          "power_cable_harness": 1
+        },
+        "degradation_per_missed_maintenance": 0.1
+      },
+      "realism": {
+        "source_url": "https://www.nasa.gov/reference/environmental-control-and-life-support-systems-eclss/",
+        "basis": "Distributed life support needs segregated fluid circuits, pumps, isolation valves, leak detection, heat tracing and pressure acceptance. Five satellite vaults each have a 1.2 km routing envelope; this is a pressure/control planning limit, not free pipe. Their conserved 4.5 km corridor allotments provide 22.5 km total installed route for the expanded campus, while every actual orthogonal segment is still debited from that finite budget. Each common buried corridor carries three isolated circuits, so one vault's BOM contains 13.5 km of pressure tube: 1,350 ten-metre pipe units.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "A common buried utility corridor is realistic for a compact outpost, but water and oxygen remain in separate pressure-rated circuits with sectional isolation. A commissioned network is a physical prerequisite, not readiness capacity by itself."
+    },
+    "potable_water_tank": {
+      "tier": 2,
+      "display_name": "15 m³ Potable-Water Storage Module",
+      "description": "A 15,000-litre baffled potable-water bladder inside a locally assembled insulated micrometeoroid shell, with level sensing, isolation valves, sampling port and freeze-protected utility connections.",
+      "materials": {
+        "qualified_potable_water_tank_liner": 1,
+        "pressure_vessel_section": 12,
+        "structural_truss_section": 4,
+        "metal_pipe": 12,
+        "vacuum_gasket_seal": 32,
+        "machined_bolts_fasteners": 120,
+        "insulated_fabric": 20,
+        "electronic_component": 2,
+        "regolith": 200
+      },
+      "base_duration_ticks": 960,
+      "construction": {
+        "work_person_hours": 40,
+        "recommended_crew": 3,
+        "phases": ["foundation", "bladder_and_shell", "plumbing", "insulation_and_heat_trace", "hydrostatic_test", "sanitation_and_commissioning"]
+      },
+      "min_engineering": 4,
+      "requires_tool": true,
+      "requires_structure": null,
+      "manufacturing_operations": ["site_foundation", "mechanical_installation", "pipework", "proof_test", "commissioning"],
+      "mass_budget_kg": {
+        "input_total_kg": 1337.6,
+        "delivered_core_mass_kg": 350.0,
+        "output_total_kg": 1687.6,
+        "process_loss_kg": 0.0
+      },
+      "output": {
+        "type": "structure",
+        "structure_id": "potable_water_tank",
+        "effects": {
+          "potable_water_storage_capacity_liters": 15000,
+          "requires_life_support_distribution_grid": true,
+          "freeze_protected": true,
+          "readiness_credit_requires_connection": true
+        }
+      },
+      "colony_contribution": {
+        "water_storage": 15000.0
+      },
+      "maintenance": {
+        "interval_ticks": 17280,
+        "repair_materials": {
+          "vacuum_gasket_seal": 2,
+          "insulated_fabric": 2
+        },
+        "degradation_per_missed_maintenance": 0.1
+      },
+      "realism": {
+        "source_url": "https://standards.nasa.gov/standard/NASA/NASA-STD-6016",
+        "basis": "The potable-contact liner is finite flight cargo because clean polymers, welds and compatibility certification cannot be improvised from regolith. Crew and robots build the outer support/shielding, connect plumbing, hydrostatically proof-test it and sanitize the water path.",
+        "field_nonmanufacturable_inputs": ["qualified_potable_water_tank_liner"]
+      },
+      "real_world_basis": "Six modules provide 90 m³ of settlement tankage, slightly above thirty days of the configured 2,718 L/day external make-up requirement. Stored water mass is inventory, not part of dry structural mass."
+    },
+    "oxygen_buffer_tank": {
+      "tier": 3,
+      "display_name": "2,000 kg Cryogenic Oxygen Buffer Module",
+      "description": "A delivered vacuum-jacketed LOX vessel core on a locally built shielded foundation, with cryocooling, pressure regulation, isolation, oxygen-compatible valves and a gas-distribution interface.",
+      "materials": {
+        "qualified_lox_tank_core": 1,
+        "pressure_vessel_section": 8,
+        "structural_truss_section": 6,
+        "metal_pipe": 20,
+        "vacuum_gasket_seal": 40,
+        "machined_bolts_fasteners": 160,
+        "thermal_control_loop": 1,
+        "power_cable_harness": 2,
+        "electronic_component": 4,
+        "regolith": 300
+      },
+      "base_duration_ticks": 1440,
+      "construction": {
+        "work_person_hours": 60,
+        "recommended_crew": 3,
+        "phases": ["foundation_and_clearance", "tank_setting", "oxygen_clean_manifold", "cryocooler_and_power", "pressure_and_leak_test", "commissioning"]
+      },
+      "min_engineering": 6,
+      "requires_tool": true,
+      "requires_structure": null,
+      "manufacturing_operations": ["site_foundation", "heavy_module_deployment", "pipework", "electrical_integration", "proof_test", "commissioning"],
+      "mass_budget_kg": {
+        "input_total_kg": 1414.2,
+        "delivered_core_mass_kg": 1800.0,
+        "output_total_kg": 3214.2,
+        "process_loss_kg": 0.0
+      },
+      "output": {
+        "type": "structure",
+        "structure_id": "oxygen_buffer_tank",
+        "effects": {
+          "oxygen_storage_capacity_kg": 2000,
+          "power_consumption_w": 2000,
+          "unpowered_boiloff_fraction_per_day": 0.0005,
+          "requires_life_support_distribution_grid": true,
+          "readiness_credit_requires_connection": true
+        }
+      },
+      "colony_contribution": {
+        "oxygen_storage": 2000.0
+      },
+      "maintenance": {
+        "interval_ticks": 4032,
+        "repair_materials": {
+          "vacuum_gasket_seal": 2,
+          "power_cable_harness": 1,
+          "electronic_component": 1
+        },
+        "degradation_per_missed_maintenance": 0.1
+      },
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/citations/20170009550",
+        "basis": "Long-duration LOX storage requires a qualified oxygen-compatible pressure vessel, multilayer insulation, vacuum integrity, pressure control and active thermal management. Those safety-critical internals are delivered; local work is limited to supports, shielding, hookups and acceptance testing.",
+        "field_nonmanufacturable_inputs": ["qualified_lox_tank_core"]
+      },
+      "real_world_basis": "Two modules store 4,000 kg O2, exceeding the configured 3,444 kg thirty-day requirement for 106 occupants. The original lander oxygen remains a separate precursor emergency reserve and earns no settlement storage credit."
+    },
+    "water_collector": {
+      "tier": 1,
+      "display_name": "Dual-Mode Water Extraction Plant",
+      "description": "A roughly 330 kg, 200 L/day skid using an atmospheric cold-trap on humid planets or a heated icy-regolith dryer beside a verified ice face.",
+      "materials": {
+        "pump_compressor_module": 1,
+        "thermal_control_loop": 1,
+        "structural_truss_section": 2,
+        "metal_pipe": 8,
+        "vacuum_gasket_seal": 12,
+        "machined_bolts_fasteners": 40,
+        "basalt": 40,
+        "electronic_component": 2
+      },
+      "base_duration_ticks": 960,
+      "construction": {
+        "work_person_hours": 40,
+        "recommended_crew": 3,
+        "phases": ["survey_and_foundation", "mechanical_assembly", "pipework", "pressure_test", "commissioning"]
+      },
+      "min_engineering": 2,
+      "requires_tool": true,
+      "requires_structure": null,
+      "manufacturing_operations": ["site_foundation", "mechanical_installation", "pipework", "proof_test", "commissioning"],
+      "mass_budget_kg": {
+        "input_total_kg": 329.6,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 329.6,
+        "process_loss_kg": 0.0
+      },
+      "output": {
+        "type": "structure",
+        "structure_id": "water_collector",
+        "effects": {
+          "water_collection_rate_liters_per_tick": 0.6944444444444444,
+          "power_consumption_w": 5000,
+          "requires_water_source": true,
+          "extraction_modes": ["atmospheric_cold_trap", "icy_regolith_dryer"],
+          "minimum_atmospheric_h2o_fraction": 0.001,
+          "requires_ice_proximity_for_icy_regolith_mode": true,
+          "storage_capacity_liters": 250
+        }
+      },
+      "colony_contribution": {
+        "water_extraction": 200.0
+      },
+      "maintenance": {
+        "interval_ticks": 4032,
+        "repair_materials": {
+          "regolith": 3
+        },
+        "degradation_per_missed_maintenance": 0.15
+      },
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/citations/20205008294",
+        "basis": "NASA's 325 kg, 2.4 kW lunar pilot anchors the icy-regolith mode; atmospheric mode is allowed only on the configured worlds whose measured H2O fraction exceeds the threshold.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "ISRU ice extraction on the Moon involves thermal or mechanical extraction from regolith. This represents the simplest version — manual extraction with basic containment."
+    },
+    "hand_tools": {
+      "tier": 1,
+      "display_name": "Crafted Hand Tools",
+      "description": "Iron-tipped tools: pickaxe, shovel, chisel, and pry bar. Significantly improves gathering speed over stone tools and enables parallel work. Each set weighs 4 kg.",
+      "materials": {
+        "iron_ore": 12,
+        "basalt": 6
+      },
+      "base_duration_ticks": 6,
+      "min_engineering": 0,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "item",
+        "item_id": "hand_tools",
+        "effects": {
+          "gather_speed_multiplier": 1.3,
+          "craft_speed_multiplier": 1.15,
+          "durability_uses": 100
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "Iron implements for excavation, cutting, and material processing. Baseline tools for any construction effort."
+    },
+    "latrine": {
+      "tier": 1,
+      "requires_atmosphere": true,
+      "display_name": "Sanitation Pit",
+      "description": "A sealed waste disposal pit with regolith cover system. Provides basic hygiene without consuming water. Agents using this restore 15 hygiene points. Prevents surface contamination and disease spread in the camp area.",
+      "materials": {
+        "regolith": 20,
+        "basalt": 5
+      },
+      "base_duration_ticks": 4,
+      "min_engineering": 0,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "latrine",
+        "effects": {
+          "hygiene_restore_no_water": 15,
+          "disease_risk_reduction_radius": 5,
+          "disease_risk_reduction_factor": 0.5,
+          "capacity_uses_before_full": 200
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "Field sanitation is critical for disease prevention. Antarctic research stations use similar sealed waste systems. Without proper sanitation, fecal-oral disease transmission risk increases exponentially."
+    },
+    "storage_crate": {
+      "tier": 1,
+      "display_name": "Storage Container",
+      "description": "A sealed basalt-and-iron container for material storage at the camp. Agents can deposit and withdraw materials without carrying everything. Each crate holds 200 kg of materials.",
+      "materials": {
+        "iron_ore": 10,
+        "basalt": 8
+      },
+      "base_duration_ticks": 4,
+      "min_engineering": 0,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "storage_crate",
+        "effects": {
+          "storage_capacity_kg": 200,
+          "material_preservation": true,
+          "accessible_radius_units": 2
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "Central material storage enables division of labor — gatherers deposit, builders withdraw. Standard logistics practice."
+    },
+    "trail_marker": {
+      "tier": 1,
+      "display_name": "Trail Marker System",
+      "description": "A set of 10 tall basalt cairns with reflective iron caps placed along a route. Agents following marked trails move 20% faster due to pre-scouted terrain. Also prevents getting lost — critical in featureless terrain or during dust storms.",
+      "materials": {
+        "basalt": 15,
+        "iron_ore": 3
+      },
+      "base_duration_ticks": 5,
+      "min_engineering": 0,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "trail_marker",
+        "effects": {
+          "movement_speed_bonus_on_trail": 0.2,
+          "covers_path_length_units": 30,
+          "navigation_aid": true,
+          "lost_prevention": true
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "Cairns have been used for navigation since prehistory. Antarctic expeditions use flagged bamboo poles. Reflective markers visible from distance in low-light conditions."
+    },
+    "stone_furnace": {
+      "tier": 1,
+      "display_name": "Delivered Electric Process Furnace",
+      "description": "One of two landed 8-tonne enclosed induction/resistance process cells for ore reduction and glass melting. Batch recipes charge electrical energy explicitly and close feedstock, slag and off-gas mass; sulfur is neither construction material nor fuel.",
+      "field_constructible": false,
+      "disabled_reason": "This flight-qualified process cell is finite delivered hardware; the field shop services it but cannot build another one from rocks.",
+      "materials": {},
+      "base_duration_ticks": 0,
+      "min_engineering": 2,
+      "requires_tool": false,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "stone_furnace",
+        "effects": {
+          "enables_smelting": true,
+          "processing_rate_units_per_tick": 3,
+          "max_temperature_c": 1700,
+          "electrically_powered": true,
+          "batch_energy_accounting": true,
+          "light_radius_units": 0
+        }
+      },
+      "colony_contribution": null,
+      "maintenance": {
+        "interval_ticks": 4032,
+        "repair_materials": {
+          "reduced_iron_ingot": 3,
+          "finned_heat_sink": 1,
+          "electronic_component": 1
+        },
+        "degradation_per_missed_maintenance": 0.1
+      },
+      "real_world_basis": "The mission manifest delivers two electrically powered process furnaces. Carbon-bearing reductant is accounted in the iron batch and electrical energy in each manufacturing cycle; sulfur combustion is excluded."
+    },
+    "_comment_tier_1_5": "=== TIER 1.5: REFINED MATERIALS (requires stone_furnace) ===",
+    "reduced_iron_ingot": {
+      "tier": 1,
+      "display_name": "Reduced Iron Ingots",
+      "description": "Small-batch carbothermic reduction, slag separation and casting of a graded iron-oxide ore lot into two standardized 5 kg structural iron ingots.",
+      "materials": {
+        "iron_ore": 4,
+        "graphite": 1
+      },
+      "base_duration_ticks": 48,
+      "energy_kwh_per_batch": 18.0,
+      "min_engineering": 1,
+      "requires_tool": true,
+      "requires_structure": "stone_furnace",
+      "manufacturing_operations": ["ore_reduction"],
+      "mass_budget_kg": {
+        "input_total_kg": 19.8,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 10.0,
+        "process_loss_kg": 9.8,
+        "elemental_balance": {
+          "minimum_iron_grade_mass_fraction": 0.60,
+          "maximum_iron_in_ore_charge_kg": 10.8,
+          "cast_iron_output_kg": 10.0,
+          "balance_status": "closed_with_0.8_kg_iron_in_slag_and_process_loss"
+        }
+      },
+      "output": {
+        "type": "material",
+        "material_id": "reduced_iron_ingot",
+        "quantity": 2,
+        "effects": {
+          "notes": "Two 5 kg reduced-iron ingots per batch. Output is bounded below the iron contained in a 60% Fe ore charge."
+        }
+      },
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/citations/20205007780",
+        "basis": "A graphite reductant removes oxygen from a graded iron-oxide concentrate; gangue, unrecovered iron, ash and reduction off-gas remain in the 9.8 kg process-loss stream.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "At a conservative 60% Fe ore grade, the 18 kg ore charge contains at most 10.8 kg iron; the recipe therefore cannot cast more than two 5 kg ingots."
+    },
+    "metal_pipe": {
+      "tier": 1,
+      "display_name": "Extruded Metal Pipes",
+      "description": "A ten-metre pressure-tube unit formed, joined and proof-tested for gas or water service. One production batch yields 2 units from 2 reduced iron ingots after forming and process loss.",
+      "materials": {
+        "reduced_iron_ingot": 2
+      },
+      "base_duration_ticks": 36,
+      "energy_kwh_per_batch": 7.5,
+      "min_engineering": 1,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["tube_fabrication", "cnc_machining", "proof_test"],
+      "mass_budget_kg": {
+        "input_total_kg": 10.0,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 7.0,
+        "process_loss_kg": 3.0
+      },
+      "output": {
+        "type": "material",
+        "material_id": "metal_pipe",
+        "quantity": 2,
+        "effects": {
+          "notes": "Essential fluid and gas transport pipes. Required for water condensation systems, ISRU units, and life support."
+        }
+      },
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/citations/20120006581",
+        "basis": "Pressure tubing needs forming or welding, machined interfaces and a leak/proof test; a hot furnace alone cannot finish it.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "Metal pipe extrusion in a furnace kiln. Essential for plumbing, condensers, and pneumatic/hydraulic systems."
+    },
+    "machined_bolts_fasteners": {
+      "tier": 1,
+      "display_name": "Aerospace Fasteners & Bolts",
+      "description": "High-tensile threaded titanium-iron bolts, nuts, and anchoring rivets machined for airtight vacuum habitat assembly. Batch of 8 bolts per refined ingot.",
+      "materials": {
+        "reduced_iron_ingot": 1
+      },
+      "base_duration_ticks": 24,
+      "energy_kwh_per_batch": 2.0,
+      "min_engineering": 1,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["cnc_machining"],
+      "mass_budget_kg": {
+        "input_total_kg": 5.0,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 4.0,
+        "process_loss_kg": 1.0
+      },
+      "output": {
+        "type": "material",
+        "material_id": "machined_bolts_fasteners",
+        "quantity": 20,
+        "effects": {
+          "notes": "Essential mechanical fasteners. Required to bolt together every structure frame, radiator, and habitat panel."
+        }
+      },
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/api/citations/20060007799/downloads/20060007799.pdf",
+        "basis": "Threaded fasteners are precision-machined and inspected; the one-kilogram difference is chips, cutoff and rejected stock.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "Aerospace fasteners (NAS/MS standards) require precise threading and torque ratings to withstand thermal cycling (-130°C to +120°C)."
+    },
+    "vacuum_gasket_seal": {
+      "tier": 1,
+      "display_name": "Vacuum-Rated Pressure Gasket",
+      "description": "Elastomeric fluoropolymer and silicate sealing rings for pipe flanges, airlocks, and pressure hull joints. Zero-outgassing in vacuum.",
+      "materials": {
+        "fluoroelastomer_seal_stock": 1
+      },
+      "base_duration_ticks": 24,
+      "energy_kwh_per_batch": 1.5,
+      "min_engineering": 1,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["polymer_molding"],
+      "mass_budget_kg": {
+        "input_total_kg": 0.0,
+        "delivered_core_mass_kg": 1.0,
+        "output_total_kg": 1.0,
+        "process_loss_kg": 0.0
+      },
+      "output": {
+        "type": "material",
+        "material_id": "vacuum_gasket_seal",
+        "quantity": 4,
+        "effects": {
+          "notes": "Hermetic pressure seals. Required for all airtight plumbing, airlocks, and life support connections."
+        }
+      },
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://standards.nasa.gov/standard/NASA/NASA-STD-6016",
+        "basis": "Qualified low-outgassing seal polymer is delivered; the field cell cuts and molds replacement seals but does not synthesize aerospace elastomer from rocks.",
+        "field_nonmanufacturable_inputs": ["fluoroelastomer_seal_stock"]
+      },
+      "real_world_basis": "Space-rated O-rings (Viton/Kalrez) are critical to maintain cabin pressure (101.3 kPa) against external vacuum (0 kPa)."
+    },
+    "finned_heat_sink": {
+      "tier": 1,
+      "display_name": "Radiative Heat Sink Array",
+      "description": "Folded high-conductivity metal radiator fins for rejecting waste heat in vacuum. Essential for condensers, furnaces, and life support.",
+      "materials": {
+        "reduced_iron_ingot": 2
+      },
+      "base_duration_ticks": 48,
+      "energy_kwh_per_batch": 5.0,
+      "min_engineering": 2,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["cnc_machining"],
+      "mass_budget_kg": {
+        "input_total_kg": 10.0,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 8.0,
+        "process_loss_kg": 2.0
+      },
+      "output": {
+        "type": "material",
+        "material_id": "finned_heat_sink",
+        "quantity": 1,
+        "effects": {
+          "notes": "Radiative thermal control component. Required for water collectors, ISRU units, and power reactors."
+        }
+      },
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/citations/20120006581",
+        "basis": "Radiator stock is machined or folded to controlled geometry; process loss accounts for fins, cutoff and machining chips.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "In a vacuum, convective cooling is impossible; all heat must be radiated via Stefan-Boltzmann thermal radiation (q = εσAT^4)."
+    },
+    "glass_pane": {
+      "tier": 1,
+      "display_name": "Glass Panes",
+      "description": "SiO2-rich silica sand is beneficiated, melted and formed into three imperfect 4 kg glass sheets for protected construction uses.",
+      "materials": {
+        "silica_sand": 6
+      },
+      "base_duration_ticks": 60,
+      "energy_kwh_per_batch": 20.0,
+      "min_engineering": 1,
+      "requires_tool": true,
+      "requires_structure": "stone_furnace",
+      "manufacturing_operations": ["glass_melting"],
+      "mass_budget_kg": {
+        "input_total_kg": 15.6,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 12.0,
+        "process_loss_kg": 3.6
+      },
+      "output": {
+        "type": "material",
+        "material_id": "glass_pane",
+        "quantity": 3,
+        "effects": {
+          "notes": "Flat glass for construction. Transparency enables greenhouse use. Can be tempered for structural strength."
+        }
+      },
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/citations/20205007780",
+        "basis": "Silica-rich sand is melted and cast without fictitious sulfur fuel mass; rejects and volatile/gangue removal close the batch mass.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "Glass production from silica sand at ~1700°C for pure glass. Mixed mineral sand vitrifies at lower temperatures (~1000-1200°C), producing functional but imperfect glass."
+    },
+    "insulated_fabric": {
+      "tier": 1,
+      "display_name": "Insulated Fabric Sheets",
+      "description": "Woven carbon fiber and regolith-mineral composite sheets. Used for clothing, bedding, shelter insulation, and filtration. Batch of 3 sheets from carbon compounds and fine regolith.",
+      "materials": {
+        "basalt": 2
+      },
+      "base_duration_ticks": 72,
+      "energy_kwh_per_batch": 6.0,
+      "min_engineering": 1,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["composite_lamination"],
+      "mass_budget_kg": {
+        "input_total_kg": 5.8,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 4.5,
+        "process_loss_kg": 1.3
+      },
+      "output": {
+        "type": "material",
+        "material_id": "insulated_fabric",
+        "quantity": 3,
+        "effects": {
+          "notes": "Multi-purpose textile. Thermal insulation R-value ~2.5. Used in protective suit, bedroll, and shelter upgrades."
+        }
+      },
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/api/citations/20210024855/downloads/BVAD_2.15.22-final.pdf",
+        "basis": "Melt-drawn basalt fibre is laid into insulation blankets; loose regolith is not treated as woven carbon cloth.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "Basalt fiber textiles are a real product — melted basalt drawn into fibers creates material stronger than fiberglass with excellent thermal properties. Used in industrial insulation on Earth."
+    },
+    "rope_cordage": {
+      "tier": 1,
+      "display_name": "Fiber Rope & Cordage",
+      "description": "A 50 m coil of braided basalt-fibre cordage made by melt drawing, sizing and braiding verified basalt feedstock for rigging, lashing and rescue.",
+      "materials": {
+        "basalt": 2
+      },
+      "base_duration_ticks": 36,
+      "energy_kwh_per_batch": 6.0,
+      "min_engineering": 0,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["heated_extrusion", "composite_lamination"],
+      "mass_budget_kg": {
+        "input_total_kg": 5.8,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 3.0,
+        "process_loss_kg": 2.8
+      },
+      "output": {
+        "type": "material",
+        "material_id": "rope_cordage",
+        "quantity": 1,
+        "effects": {
+          "notes": "Building material for advanced structures. Also used for rescue, rappelling, and load hauling."
+        }
+      },
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/api/citations/20210024855/downloads/BVAD_2.15.22-final.pdf",
+        "basis": "Basalt is melted and drawn into continuous fibre, then braided and proof loaded; unmelted inclusions, sizing loss and trim are recorded as process loss.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "Basalt fibre is a real melt-drawn reinforcement. Mission cordage still requires controlled fibre drawing, sizing, braiding and proof loading rather than treating graphite as ready carbon fibre."
+    },
+    "_comment_tier_2": "=== TIER 2: INTERMEDIATE SYSTEMS (requires refined materials + shelter) ===",
+    "radiator_panel": {
+      "tier": 2,
+      "display_name": "Thermal Radiator Panel",
+      "description": "High-emissivity aerospace radiator panel with circulating heat pipes. Dumps industrial waste heat from electrolysis, forges, and habitat ECLSS directly into space via radiative cooling.",
+      "materials": {
+        "reduced_iron_ingot": 4,
+        "glass_pane": 2
+      },
+      "base_duration_ticks": 96,
+      "energy_kwh_per_batch": 12.0,
+      "min_engineering": 2,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "radiator_panel",
+        "effects": {
+          "heat_rejection_kw": 8.0,
+          "emissivity": 0.92,
+          "notes": "Maintains colony electronics at safe 21°C equilibrium, preventing thermal throttling."
+        }
+      },
+      "colony_contribution": {
+        "category": "energy",
+        "points": 10,
+        "description": "Prevents base machinery overheating and electronic thermal failures."
+      },
+      "real_world_basis": "ISS Active Thermal Control System (ATCS) and NASA Orion heat pipe radiator deployers."
+    },
+    "forge": {
+      "tier": 2,
+      "display_name": "Delivered Hot-Work and Joining Cell",
+      "description": "One of two landed 6-tonne electrically powered hot-forming, welding and brazing cells. It is not a primitive bellows forge and does not burn sulfur. Precision machining, polymer processing and clean electronics remain assigned to the separate enclosed fabrication cells.",
+      "field_constructible": false,
+      "disabled_reason": "This flight-qualified industrial cell is finite delivered hardware; only service and replacement of field-repairable modules are allowed.",
+      "materials": {},
+      "base_duration_ticks": 0,
+      "min_engineering": 4,
+      "requires_tool": false,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "forge",
+        "effects": {
+          "enables_advanced_metalwork": true,
+          "processing_rate_units_per_tick": 5,
+          "max_temperature_c": 1500,
+          "electrically_powered": true,
+          "batch_energy_accounting": true,
+          "light_radius_units": 0,
+          "tool_repair_enabled": true,
+          "notes": "Enables hot forming, welding, brazing and compatible tool repair. Composite layup, seals, pressure garments, electronics and proof testing remain in the enclosed CNC/clean-assembly cell."
+        }
+      },
+      "colony_contribution": null,
+      "maintenance": {
+        "interval_ticks": 4032,
+        "repair_materials": {
+          "reduced_iron_ingot": 3,
+          "basalt": 5
+        },
+        "degradation_per_missed_maintenance": 0.1
+      },
+      "real_world_basis": "A deployable surface workshop performs controlled hot forming and joining with electrical power, tooling, ventilation and inspection. It cannot replace semiconductor, seal, bearing or pressure-vessel production lines."
+    },
+    "composite_panel": {
+      "tier": 2,
+      "display_name": "Composite Structural Panels",
+      "description": "Three inspected fibre-metal laminate panels made with finite qualified low-outgassing resin, reduced-iron load spreaders and glass reinforcement. The surface shop cannot synthesize aerospace polymer from planetary carbon.",
+      "materials": {
+        "qualified_composite_resin_pack": 6,
+        "reduced_iron_ingot": 4,
+        "glass_pane": 2
+      },
+      "base_duration_ticks": 72,
+      "min_engineering": 3,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["composite_lamination"],
+      "mass_budget_kg": {
+        "input_total_kg": 28.0,
+        "delivered_core_mass_kg": 10.8,
+        "output_total_kg": 36.0,
+        "process_loss_kg": 2.8
+      },
+      "output": {
+        "type": "material",
+        "material_id": "composite_panel",
+        "quantity": 3,
+        "effects": {
+          "notes": "Pressure-rated construction material. Required for habitat modules, greenhouses, and pressurized structures."
+        }
+      },
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/api/citations/20210024855/downloads/BVAD_2.15.22-final.pdf",
+        "basis": "Panels require controlled layup, consolidation and cure. Six serialized 1.8 kg resin/hardener packs are finite delivered chemistry; planetary graphite is not treated as polymer or carbon-fibre precursor.",
+        "field_nonmanufacturable_inputs": ["qualified_composite_resin_pack"]
+      },
+      "real_world_basis": "Flight composites require qualified resin systems, fibre preparation, controlled cure and inspection. Only a limited field-made fraction is permitted by the finite resin manifest."
+    },
+    "electronic_component": {
+      "tier": 2,
+      "display_name": "Electronic Components",
+      "description": "A flight-qualified control-board core configured, interconnected and acceptance-tested in the enclosed electronics cell. Semiconductor junctions are not fabricated from local ore.",
+      "materials": {
+        "qualified_control_board_core": 1
+      },
+      "base_duration_ticks": 144,
+      "energy_kwh_per_batch": 4.0,
+      "min_engineering": 5,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["electronics_clean_bench"],
+      "mass_budget_kg": {
+        "input_total_kg": 0.0,
+        "delivered_core_mass_kg": 0.8,
+        "output_total_kg": 0.8,
+        "process_loss_kg": 0.0
+      },
+      "output": {
+        "type": "material",
+        "material_id": "electronic_component",
+        "quantity": 1,
+        "effects": {
+          "notes": "Precision electronic parts. Required for solar panels, ISRU units, communications, and research equipment."
+        }
+      },
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://standards.nasa.gov/standard/NASA/NASA-STD-8739-1",
+        "basis": "The crew configures and acceptance-tests a qualified control board; it cannot fabricate semiconductor junctions from planetary ore.",
+        "field_nonmanufacturable_inputs": ["qualified_control_board_core"]
+      },
+      "real_world_basis": "Field electronics work can configure, rework and acceptance-test qualified boards, but semiconductor-grade devices and controlled multilayer substrates remain finite flight cargo."
+    },
+    "sulfur_regolith_paver": {
+      "tier": 2,
+      "display_name": "Sulfur-Regolith Paver Batch",
+      "description": "An optional 57 kg non-pressure paving or berm block made from a measured 34.8 wt% charge of purified elemental sulfur and 65.2 wt% graded regolith. It is melted and mixed near 140C, vacuum cast/extruded, cooled, inspected and rejected after damaging thermal-cycle tests. It provides no habitat pressure or automatic radiation credit.",
+      "materials": {
+        "sulfur": 10,
+        "regolith": 25
+      },
+      "base_duration_ticks": 48,
+      "energy_kwh_per_batch": 4.0,
+      "min_engineering": 4,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": [
+        "heated_extrusion",
+        "vacuum_casting",
+        "thermal_cycle_acceptance"
+      ],
+      "output": {
+        "type": "material",
+        "material_id": "sulfur_regolith_paver",
+        "quantity": 1,
+        "effects": {
+          "sulfur_mass_fraction": 0.348,
+          "qualified_uses": ["unpaved_road_dust_control", "non_pressure_berm_block"],
+          "pressure_habitat_credit": false,
+          "radiation_capacity_credit": false
+        }
+      },
+      "mass_budget_kg": {
+        "input_total_kg": 57.5,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 57.0,
+        "process_loss_kg": 0.5
+      },
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/archive/nasa/casi.ntrs.nasa.gov/19980001900.pdf",
+        "basis": "NASA vacuum-chamber studies used molten sulfur with lunar-regolith simulant and reported sulfur-binder mixtures as waterless construction material candidates. Temperature cycling and vacuum stability remain acceptance risks, so this optional batch earns no critical capacity credit.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "Optional waterless sulfur-bound aggregate, not a fictitious sulfur-iron grid battery."
+    },
+    "structural_truss_section": {
+      "tier": 2,
+      "display_name": "Load-Bearing Truss Section",
+      "description": "A welded and bolted 40 kg structural bay with anchor feet, cross-bracing and thermal-expansion joints. One unit is a module, not one loose beam.",
+      "materials": {
+        "reduced_iron_ingot": 8,
+        "machined_bolts_fasteners": 8
+      },
+      "base_duration_ticks": 72,
+      "energy_kwh_per_batch": 8.0,
+      "min_engineering": 4,
+      "requires_tool": true,
+      "requires_structure": "forge",
+      "manufacturing_operations": ["hot_forming", "welding"],
+      "mass_budget_kg": {
+        "input_total_kg": 41.6,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 41.0,
+        "process_loss_kg": 0.6
+      },
+      "output": {"type": "material", "material_id": "structural_truss_section", "quantity": 1},
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/api/citations/20200000010/downloads/20200000010.pdf",
+        "basis": "Structural stock is formed, welded and inspected; fasteners are already CNC-finished upstream.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "Field structures use repeated truss bays with cross-bracing, anchored joints and inspected load paths; a few ingots cannot directly become an array or pressure hull."
+    },
+    "power_cable_harness": {
+      "tier": 2,
+      "display_name": "Power and Data Cable Harness",
+      "description": "A 200 m routed field section of shielded power/data conductors, connectors, insulation, grounding braid and sensor lines, assembled and electrically acceptance-tested as one harness lot.",
+      "materials": {
+        "electrical_copper_stock": 2,
+        "electronic_component": 1,
+        "insulated_fabric": 2
+      },
+      "base_duration_ticks": 72,
+      "energy_kwh_per_batch": 2.0,
+      "min_engineering": 5,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["electronics_clean_bench"],
+      "mass_budget_kg": {
+        "input_total_kg": 3.8,
+        "delivered_core_mass_kg": 15.0,
+        "output_total_kg": 18.0,
+        "process_loss_kg": 0.8
+      },
+      "output": {"type": "material", "material_id": "power_cable_harness", "quantity": 1},
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://standards.nasa.gov/standard/NASA/NASA-STD-8739-4",
+        "basis": "Lot-tracked electrical copper conductors, shielding and qualified electronics are cut, terminated, bonded and electrically acceptance-tested in an enclosed clean cell. No ore-to-wire refinery is assumed.",
+        "field_nonmanufacturable_inputs": ["electrical_copper_stock"]
+      },
+      "real_world_basis": "Large power systems require routed conductors, insulation, connectors, bonding, grounding and acceptance testing rather than only an abstract electronic part."
+    },
+    "photovoltaic_laminate": {
+      "tier": 2,
+      "display_name": "Photovoltaic Laminate Module",
+      "description": "A sealed ~40 kg photovoltaic blanket section assembled from prequalified salvaged cells, cover glass, conductors, bypass electronics and a protected backing.",
+      "materials": {
+        "qualified_pv_blanket_segment": 1
+      },
+      "base_duration_ticks": 120,
+      "energy_kwh_per_batch": 6.0,
+      "min_engineering": 6,
+      "min_physics": 3,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["composite_lamination"],
+      "mass_budget_kg": {
+        "input_total_kg": 0.0,
+        "delivered_core_mass_kg": 8.0,
+        "output_total_kg": 8.0,
+        "process_loss_kg": 0.0
+      },
+      "output": {"type": "material", "material_id": "photovoltaic_laminate", "quantity": 1},
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://www.nasa.gov/wp-content/uploads/2024/09/9-reticular-solar-arrays-spec-sheet-508.pdf",
+        "basis": "The field cell inspects and integrates a flight-qualified PV blanket; semiconductor-grade cells are finite mission cargo.",
+        "field_nonmanufacturable_inputs": ["qualified_pv_blanket_segment"]
+      },
+      "real_world_basis": "The field workshop can laminate and reconnect shipped/salvaged qualified cells; it cannot create semiconductor-grade photovoltaic junctions in a stone furnace."
+    },
+    "pump_compressor_module": {
+      "tier": 2,
+      "display_name": "Pump and Compressor Module",
+      "description": "A pressure-tested pump/compressor skid with motor controls, pipe manifold, seals, mounts and isolation valves.",
+      "materials": {
+        "reduced_iron_ingot": 3,
+        "metal_pipe": 4,
+        "electronic_component": 1,
+        "vacuum_gasket_seal": 4,
+        "machined_bolts_fasteners": 8,
+        "pump_motor_bearing_core": 1
+      },
+      "base_duration_ticks": 120,
+      "energy_kwh_per_batch": 8.0,
+      "min_engineering": 5,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["assembly_test", "proof_test"],
+      "mass_budget_kg": {
+        "input_total_kg": 32.4,
+        "delivered_core_mass_kg": 14.0,
+        "output_total_kg": 36.0,
+        "process_loss_kg": 10.4
+      },
+      "output": {"type": "material", "material_id": "pump_compressor_module", "quantity": 1},
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/citations/20120006581",
+        "basis": "A delivered motor/bearing cartridge is installed in a locally machined housing and manifold, then leak and performance tested.",
+        "field_nonmanufacturable_inputs": ["pump_motor_bearing_core"]
+      },
+      "real_world_basis": "Fluid-processing equipment requires a motor, rotating machinery, valving, seals, controls and a proof-tested manifold."
+    },
+    "thermal_control_loop": {
+      "tier": 2,
+      "display_name": "Closed Thermal-Control Loop",
+      "description": "A leak-tested coolant circuit with heat exchangers, radiators, pump controls, flexible joints and redundant isolation seals.",
+      "materials": {
+        "metal_pipe": 6,
+        "finned_heat_sink": 4,
+        "vacuum_gasket_seal": 8,
+        "electronic_component": 1
+      },
+      "base_duration_ticks": 144,
+      "energy_kwh_per_batch": 6.0,
+      "min_engineering": 5,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["assembly_test", "proof_test"],
+      "mass_budget_kg": {
+        "input_total_kg": 55.8,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 55.0,
+        "process_loss_kg": 0.8
+      },
+      "output": {"type": "material", "material_id": "thermal_control_loop", "quantity": 1},
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/citations/20120006581",
+        "basis": "Pipes, radiators, seals and controls become one evacuated, charged and leak-tested pumped loop.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "Vacuum systems reject heat through pumped loops and radiators; fins alone are not a complete thermal-control system."
+    },
+    "pressure_vessel_section": {
+      "tier": 2,
+      "display_name": "Pressure-Vessel Hull Section",
+      "description": "A ~64 kg proof-tested pressure hull bay with composite shell, metal load spreaders, flange seals and aerospace fasteners.",
+      "materials": {
+        "composite_panel": 4,
+        "reduced_iron_ingot": 3,
+        "vacuum_gasket_seal": 4,
+        "machined_bolts_fasteners": 8
+      },
+      "base_duration_ticks": 180,
+      "energy_kwh_per_batch": 10.0,
+      "min_engineering": 6,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["composite_lamination", "proof_test"],
+      "mass_budget_kg": {
+        "input_total_kg": 65.6,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 64.0,
+        "process_loss_kg": 1.6
+      },
+      "output": {"type": "material", "material_id": "pressure_vessel_section", "quantity": 1},
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://standards.nasa.gov/standard/NASA/NASA-STD-6016",
+        "basis": "A pressure bay requires controlled composite assembly, sealed flanges and proof testing rather than forge-only fabrication.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "Pressurized structures require repeated load-bearing shell sections, sealed joints and proof testing; flat panels alone are not a habitable pressure vessel."
+    },
+    "hydroponic_rack": {
+      "tier": 2,
+      "display_name": "Instrumented Hydroponic Rack",
+      "description": "A crop rack with nutrient plumbing, root trays, sensors, valves and washable structural surfaces.",
+      "materials": {
+        "metal_pipe": 6,
+        "composite_panel": 2,
+        "electronic_component": 1,
+        "vacuum_gasket_seal": 4,
+        "machined_bolts_fasteners": 8
+      },
+      "base_duration_ticks": 120,
+      "energy_kwh_per_batch": 5.0,
+      "min_engineering": 4,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["assembly_test"],
+      "mass_budget_kg": {
+        "input_total_kg": 48.4,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 48.0,
+        "process_loss_kg": 0.4
+      },
+      "output": {"type": "material", "material_id": "hydroponic_rack", "quantity": 1},
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/api/citations/20210024855/downloads/BVAD_2.15.22-final.pdf",
+        "basis": "Crop support is a cleanable, instrumented irrigation assembly; it is assembled and flow-tested in the enclosed cell.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "Controlled-environment agriculture needs distributed irrigation, nutrient delivery, sensors, drainage and cleanable crop support hardware."
+    },
+    "electrolysis_stack": {
+      "tier": 3,
+      "display_name": "Solid-Oxide Electrolysis Stack",
+      "description": "A high-temperature electrolysis stack with ceramic cells, manifolds, controls, insulation, seals and heat rejection hardware.",
+      "materials": {
+        "pem_membrane_electrode_core": 1,
+        "composite_panel": 1,
+        "electronic_component": 3,
+        "vacuum_gasket_seal": 4,
+        "finned_heat_sink": 1
+      },
+      "base_duration_ticks": 240,
+      "energy_kwh_per_batch": 18.0,
+      "min_engineering": 6,
+      "min_physics": 5,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["electronics_clean_bench", "assembly_test", "proof_test"],
+      "mass_budget_kg": {
+        "input_total_kg": 23.4,
+        "delivered_core_mass_kg": 30.0,
+        "output_total_kg": 52.0,
+        "process_loss_kg": 1.4
+      },
+      "output": {"type": "material", "material_id": "electrolysis_stack", "quantity": 1},
+      "colony_contribution": null,
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/api/citations/20180006265/downloads/20180006265.pdf",
+        "basis": "The PEM membrane/electrode core is delivered; the crew integrates manifolds, thermal hardware, controls and performs clean leak testing.",
+        "field_nonmanufacturable_inputs": ["pem_membrane_electrode_core"]
+      },
+      "real_world_basis": "MOXIE-class systems contain gas acquisition, high-temperature electrolysis, insulation, sensors and control electronics; the active stack is only one subsystem."
+    },
+    "water_purifier": {
+      "tier": 2,
+      "display_name": "Wastewater Reclamation Unit",
+      "description": "A roughly 210 kg wastewater processor with distillation, multifiltration, catalytic polishing, quality sensors, pumps, storage and a thermal-control loop. It treats up to 500 L/day at a conservative 90% total recovery; it never increases the quantity extracted by a water collector.",
+      "materials": {
+        "pump_compressor_module": 1,
+        "thermal_control_loop": 1,
+        "pressure_vessel_section": 1,
+        "metal_pipe": 6,
+        "vacuum_gasket_seal": 12,
+        "glass_pane": 6,
+        "electronic_component": 3,
+        "insulated_fabric": 2
+      },
+      "base_duration_ticks": 720,
+      "construction": {
+        "work_person_hours": 30,
+        "recommended_crew": 3,
+        "phases": ["foundation_and_tanks", "fluid_loop_integration", "filter_and_catalyst_train", "power_and_controls", "leak_test", "water_quality_commissioning"]
+      },
+      "min_engineering": 4,
+      "requires_tool": true,
+      "requires_structure": null,
+      "manufacturing_operations": ["site_foundation", "mechanical_installation", "pipework", "electrical_integration", "proof_test", "commissioning"],
+      "mass_budget_kg": {
+        "input_total_kg": 208.4,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 208.4,
+        "process_loss_kg": 0.0
+      },
+      "output": {
+        "type": "structure",
+        "structure_id": "water_purifier",
+        "effects": {
+          "wastewater_treatment_capacity_liters_per_day": 500.0,
+          "recycling_efficiency": 0.90,
+          "storage_capacity_liters": 500,
+          "power_consumption_w": 500
+        }
+      },
+      "colony_contribution": {
+        "water_recycling": 500.0
+      },
+      "maintenance": {
+        "interval_ticks": 4032,
+        "repair_materials": {
+          "glass_pane": 1,
+          "insulated_fabric": 1
+        },
+        "degradation_per_missed_maintenance": 0.15
+      },
+      "realism": {
+        "source_url": "https://www.nasa.gov/reference/environmental-control-and-life-support-systems-eclss/",
+        "basis": "NASA WRS combines urine distillation, multifiltration, catalytic oxidation, quality sensing and potable storage and reports about 90% station water recovery. Purification changes quality and closes a wastewater loop; it does not create feed water.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "A field water processor is a pumped, pressure-tested life-support skid. The delivered six-person lander already owns a smaller WRS; this additional unit represents rated future-colony treatment capacity."
+    },
+    "solar_panel": {
+      "tier": 2,
+      "display_name": "2 MW Solar and Storage Field",
+      "description": "A robot-deployed 2 MW peak photovoltaic field with 12 MWh of qualified storage. Its readiness contribution is conservatively derated to 1 MW of firm service; local foundations, truss, routing and commissioning remain mandatory.",
+      "materials": {
+        "qualified_pv_blanket_segment": 1800,
+        "structural_truss_section": 50,
+        "power_cable_harness": 20,
+        "machined_bolts_fasteners": 800,
+        "rope_cordage": 20,
+        "electronic_component": 8,
+        "solar_tracking_drive_core": 4,
+        "power_conditioning_unit_core": 4,
+        "qualified_grid_storage_module": 1
+      },
+      "base_duration_ticks": 576,
+      "construction": {
+        "work_person_hours": 120,
+        "recommended_crew": 2,
+        "phases": ["foundation_and_anchors", "truss_erection", "blanket_deployment", "power_cabling", "electrical_checkout"]
+      },
+      "min_engineering": 5,
+      "requires_tool": true,
+      "requires_structure": null,
+      "manufacturing_operations": ["site_foundation", "mechanical_installation", "electrical_integration", "commissioning"],
+      "mass_budget_kg": {
+        "input_total_kg": 2636.4,
+        "delivered_core_mass_kg": 44496.0,
+        "output_total_kg": 47132.4,
+        "process_loss_kg": 0.0
+      },
+      "output": {
+        "type": "structure",
+        "structure_id": "solar_panel",
+        "effects": {
+          "power_output_kw": 2000,
+          "firm_service_capacity_kw": 1000,
+          "battery_storage_kwh": 12000,
+          "output_modifier": "solar_flux_relative_to_earth",
+          "degradation_rate_per_100_ticks": 0.02
+        }
+      },
+      "colony_contribution": {
+        "energy_infrastructure": 1000
+      },
+      "maintenance": {
+        "interval_ticks": 8640,
+        "repair_materials": {
+          "glass_pane": 2
+        },
+        "degradation_per_missed_maintenance": 0.05
+      },
+      "realism": {
+        "source_url": "https://www.nasa.gov/wp-content/uploads/2024/09/9-reticular-solar-arrays-spec-sheet-508.pdf",
+        "basis": "The field scales qualified blanket area from NASA deployable arrays and packages electrochemical storage as a serialized cargo module. Readiness uses only half peak power as firm-service credit and requires the 30-day system soak.",
+        "field_nonmanufacturable_inputs": ["qualified_pv_blanket_segment", "solar_tracking_drive_core", "power_conditioning_unit_core", "qualified_grid_storage_module"]
+      },
+      "real_world_basis": "This is a solar field, not one handheld panel. Semiconductor blankets and storage are finite cargo; robots deploy repeated sections while people supervise anchoring, high-voltage routing, isolation tests and commissioning."
+    },
+    "greenhouse": {
+      "tier": 2,
+      "display_name": "Pressurized Greenhouse Module",
+      "description": "A roughly 1,000 m² pressurized controlled-environment farm sized for about twenty people's dietary calories, including pressure shell bays, hydroponic racks, irrigation, thermal control, glazing, sensors and crop substrate.",
+      "materials": {
+        "preintegrated_cea_module_segment": 4,
+        "crop_seed_nutrient_pack": 20,
+        "structural_truss_section": 8,
+        "power_cable_harness": 4,
+        "metal_pipe": 8,
+        "vacuum_gasket_seal": 12,
+        "composite_panel": 20,
+        "machined_bolts_fasteners": 200,
+        "regolith": 400,
+        "electronic_component": 4
+      },
+      "base_duration_ticks": 6000,
+      "construction": {
+        "work_person_hours": 180,
+        "recommended_crew": 3,
+        "phases": ["site_and_foundation", "pressure_shell", "glazing", "thermal_and_water_loops", "hydroponics", "leak_test", "crop_commissioning"]
+      },
+      "min_engineering": 4,
+      "requires_tool": true,
+      "requires_structure": null,
+      "manufacturing_operations": ["site_foundation", "heavy_module_deployment", "pressure_integration", "hydroponic_commissioning"],
+      "mass_budget_kg": {
+        "input_total_kg": 1314.2,
+        "delivered_core_mass_kg": 126288.2,
+        "output_total_kg": 127602.4,
+        "process_loss_kg": 0.0
+      },
+      "output": {
+        "type": "structure",
+        "structure_id": "greenhouse",
+        "effects": {
+          "food_production_kcal_per_tick": 165.625,
+          "water_consumption_liters_per_tick": 13.8888888889,
+          "power_consumption_w": 2600000,
+          "crop_area_m2": 1000,
+          "first_harvest_days": 28,
+          "crop_service_interval_hours": 24,
+          "crop_service_grace_hours": 12,
+          "crop_service_labor_minutes": 30,
+          "harvest_batch_interval_hours": 24,
+          "harvest_labor_minutes": 30,
+          "unharvested_buffer_days": 2,
+          "pressurized_workspace": true
+        }
+      },
+      "colony_contribution": {
+        "food_production": 47700.0
+      },
+      "maintenance": {
+        "interval_ticks": 2016,
+        "repair_materials": {
+          "glass_pane": 2,
+          "composite_panel": 1
+        },
+        "degradation_per_missed_maintenance": 0.1
+      },
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/api/citations/20210024855/downloads/BVAD_2.15.22-final.pdf",
+        "basis": "NASA BVAD mass and lighting allocations place a 1000 m2 controlled farm near 127.6 tonnes and 2.6 MW. The flight hardware is divided into four independently restrained 31.47 t CEA/pressure segments so each one fits the dedicated 35 t surface transporter; the crew and supervised assembly robots then install foundations, truss, utility interfaces, seals, external panels and regolith protection. Lighting and irrigation are automated, but each module still requires a daily crop-health and nutrient-loop inspection plus explicit harvest/packing labor; at most two days of ripe crop may wait in the chamber before yield is lost.",
+        "field_nonmanufacturable_inputs": ["preintegrated_cea_module_segment", "crop_seed_nutrient_pack"]
+      },
+      "real_world_basis": "NASA controlled-crop studies estimate about 50 m² of crop area per person for roughly 2,500 dietary kcal/day. A module credited with 44,000 kcal/day therefore represents an industrial-scale farm, not a small glass shed."
+    },
+    "medical_station": {
+      "tier": 2,
+      "display_name": "Medical Treatment Station",
+      "description": "Sterilized workspace with diagnostics and a treatment area. It improves triage and supportive care but cannot reverse absorbed radiation dose and provides no physical shielding capacity.",
+      "materials": {
+        "reduced_iron_ingot": 8,
+        "glass_pane": 4,
+        "insulated_fabric": 3,
+        "regolith": 10,
+        "electronic_component": 1
+      },
+      "base_duration_ticks": 18,
+      "min_engineering": 3,
+      "min_medical": 3,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "medical_station",
+        "effects": {
+          "treatment_efficiency_multiplier": 2.0,
+          "disease_recovery_speed_multiplier": 1.5,
+          "radiation_supportive_care_enabled": true,
+          "injury_healing_rate_per_tick": 0.02,
+          "medical_supply_usage_reduction": 0.5
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "ISS Crew Health Care System (CHeCS). Supportive care may treat symptoms and complications; shielding and exposure avoidance are the preventive controls."
+    },
+    "research_workbench": {
+      "tier": 2,
+      "display_name": "Research & Analysis Workbench",
+      "description": "A scientific workstation with the portable scanner integrated as a fixed analyzer. Enables material analysis (identify unknown resources), chemical synthesis (batteries, medicines), and geological surveys that reveal resource locations in a 50-unit radius.",
+      "materials": {
+        "reduced_iron_ingot": 10,
+        "glass_pane": 4,
+        "electronic_component": 2,
+        "basalt": 8
+      },
+      "base_duration_ticks": 15,
+      "min_engineering": 3,
+      "min_physics": 4,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "research_workbench",
+        "effects": {
+          "resource_survey_radius_units": 50,
+          "material_analysis_enabled": true,
+          "chemical_synthesis_enabled": true,
+          "research_speed_multiplier": 1.5,
+          "notes": "Survey reveals all resource nodes within 50 units. Chemical synthesis enables pharmaceutical and battery production."
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "Mars science laboratories combine spectrometers, XRF analyzers, and sample preparation tools. The portable scanner serves as input sensor."
+    },
+    "communication_relay": {
+      "tier": 2,
+      "display_name": "Short-Range Communication Relay",
+      "description": "A radio transceiver tower enabling agent-to-agent communication within 100-unit radius without line of sight. Reduces coordination overhead and allows distress signals. Requires power.",
+      "materials": {
+        "reduced_iron_ingot": 12,
+        "electronic_component": 3,
+        "electrical_copper_stock": 2,
+        "rope_cordage": 3
+      },
+      "base_duration_ticks": 14,
+      "min_engineering": 4,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "communication_relay",
+        "effects": {
+          "communication_range_units": 100,
+          "line_of_sight_required": false,
+          "distress_signal_enabled": true,
+          "coordination_bonus": 0.15,
+          "power_consumption_w": 20
+        }
+      },
+      "mass_budget_kg": {
+        "input_total_kg": 71.4,
+        "delivered_core_mass_kg": 15.0,
+        "output_total_kg": 86.4,
+        "process_loss_kg": 0.0
+      },
+      "realism": {
+        "source_url": "https://standards.nasa.gov/standard/NASA/NASA-STD-8739-4",
+        "basis": "The field crew erects the structural mast and integrates qualified radio electronics with lot-tracked copper conductor stock. The mass is a closed mission accounting assumption, not a claim that RF hardware can be made from ore.",
+        "field_nonmanufacturable_inputs": ["electrical_copper_stock"]
+      },
+      "colony_contribution": null,
+      "real_world_basis": "EVA radio communication on ISS uses UHF at ~400 MHz. Short-range relay stations extend coverage in terrain with obstacles."
+    },
+    "protective_suit": {
+      "tier": 2,
+      "display_name": "Environmental Protection Suit",
+      "description": "Field refurbishment of a delivered pressure-garment and portable-life-support core using replacement insulation and qualified seals. It provides pressure, thermal and micrometeoroid protection, but only modest incidental ionizing-radiation attenuation.",
+      "materials": {
+        "eva_suit_life_support_core": 1,
+        "insulated_fabric": 2,
+        "vacuum_gasket_seal": 2
+      },
+      "base_duration_ticks": 16,
+      "min_engineering": 3,
+      "requires_tool": true,
+      "requires_structure": "cnc_fabricator",
+      "manufacturing_operations": ["clean_softgoods_integration", "seal_replacement", "plss_leak_test", "functional_checkout"],
+      "output": {
+        "type": "item",
+        "item_id": "protective_suit",
+        "effects": {
+          "radiation_reduction_factor": 0.9,
+          "temperature_stress_reduction": 0.3,
+          "o2_efficiency_bonus": 0.2,
+          "movement_speed_penalty": 0.9,
+          "durability_ticks": 800,
+          "weight_kg": 12.0
+        }
+      },
+      "mass_budget_kg": {
+        "input_total_kg": 3.5,
+        "delivered_core_mass_kg": 8.5,
+        "output_total_kg": 12.0,
+        "process_loss_kg": 0.0
+      },
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/api/citations/20210024855/downloads/BVAD_2.15.22-final.pdf",
+        "basis": "A serialized pressure-garment and portable-life-support core is delivered. Field work is limited to clean fitting of replacement insulation and qualified seals followed by PLSS leak and functional tests in the enclosed fabrication cell; a hot forge would contaminate and damage this work. The 12 kg result is a mission mass-model assumption requiring future vendor-level validation.",
+        "field_nonmanufacturable_inputs": ["eva_suit_life_support_core"]
+      },
+      "colony_contribution": null,
+      "real_world_basis": "A pressure suit and PLSS are qualified aerospace systems, not products of a forge. Field work can replace seals and overgarments around a delivered core; thin high-Z lead is not credited as general GCR shielding."
+    },
+    "bedroll": {
+      "tier": 2,
+      "display_name": "Insulated Bedroll",
+      "description": "A padded sleeping surface with insulated fabric layers. Agents sleeping on a bedroll recover energy 30% faster and suffer 50% less temperature stress while resting. Critical for maintaining sleep quality in hostile environments.",
+      "materials": {
+        "insulated_fabric": 2,
+        "rope_cordage": 1
+      },
+      "base_duration_ticks": 4,
+      "min_engineering": 0,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "item",
+        "item_id": "bedroll",
+        "effects": {
+          "rest_efficiency_bonus": 1.3,
+          "temperature_stress_reduction_while_sleeping": 0.5,
+          "weight_kg": 3.5
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "Sleeping bag thermal rating is critical in Antarctic expeditions. Insulated sleeping surfaces prevent convective heat loss to ground. Quality sleep directly impacts cognitive performance and physical recovery."
+    },
+    "_comment_morale": "=== MORALE & QUALITY OF LIFE ITEMS ===",
+    "memorial_marker": {
+      "tier": 1,
+      "display_name": "Memorial Marker",
+      "description": "A cairn of carefully selected stones with an engraved iron plaque honoring a fallen team member. Provides a permanent morale boost to all agents within 10 units. Building this is a social act — agents who participate gain trust with each other.",
+      "materials": {
+        "basalt": 8,
+        "iron_ore": 3
+      },
+      "base_duration_ticks": 3,
+      "min_engineering": 0,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "memorial_marker",
+        "effects": {
+          "morale_bonus_radius": 10,
+          "morale_bonus_value": 0.08,
+          "trust_bonus_participants": 0.1,
+          "permanent": true,
+          "notes": "Permanent installation. Morale bonus applies to all agents within radius. Building together increases mutual trust by 0.1."
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "Memorial rituals are universal across human cultures. Antarctic expedition diaries consistently note the psychological importance of honoring the dead. Rituals reduce grief-related cognitive impairment."
+    },
+    "recreation_area": {
+      "tier": 2,
+      "display_name": "Recreation & Social Area",
+      "description": "A designated social space with seating (carved basalt), a flat table surface, and shelter. Agents spending time here restore morale and build trust with present agents. Functions as a communal gathering point — a psychological anchor for the group.",
+      "materials": {
+        "basalt": 15,
+        "regolith": 10,
+        "insulated_fabric": 2,
+        "iron_ore": 5
+      },
+      "base_duration_ticks": 10,
+      "min_engineering": 1,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "recreation_area",
+        "effects": {
+          "morale_restore_per_tick_present": 0.02,
+          "trust_bonus_per_social_tick": 0.005,
+          "max_occupants": 5,
+          "notes": "Agents idle here recover morale 2% per tick. Social interactions in this space build trust 50% faster than in the field."
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "ISS crew quarters include a communal dining/social area. Antarctic winter-over stations prioritize recreational spaces. NASA behavioral research shows social bonding spaces reduce conflict by 40%."
+    },
+    "musical_instrument": {
+      "tier": 1,
+      "display_name": "Improvised Musical Instrument",
+      "description": "A percussion instrument crafted from hollow basalt tubes and iron strikers, or a wind instrument from shaped iron pipe. Playing provides morale boost to the player and all agents within 5 units. The act of creation itself is therapeutic.",
+      "materials": {
+        "iron_ore": 5,
+        "basalt": 4
+      },
+      "base_duration_ticks": 4,
+      "min_engineering": 1,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "item",
+        "item_id": "musical_instrument",
+        "effects": {
+          "morale_bonus_player_per_use": 0.05,
+          "morale_bonus_radius": 5,
+          "morale_bonus_listeners_per_use": 0.03,
+          "use_duration_ticks": 3,
+          "weight_kg": 2.0
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "Music is a human universal found in every known culture. Antarctic expeditions (Shackleton's Endurance) used music for morale. NASA includes musical instruments on ISS. Psychological studies show group music reduces cortisol by 25%."
+    },
+    "garden_plot": {
+      "tier": 2,
+      "requires_atmosphere": true,
+      "display_name": "Ornamental Garden Plot",
+      "description": "A small non-food garden growing hardy plants selected for visual appeal rather than calories. Requires minimal water and produces no food, but provides a significant passive morale boost to all nearby agents. Living plants in an alien environment are a powerful psychological anchor to Earth.",
+      "materials": {
+        "regolith": 8,
+        "crop_seed_nutrient_pack": 1,
+        "glass_pane": 2
+      },
+      "base_duration_ticks": 8,
+      "min_engineering": 1,
+      "min_botany_bio": 3,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "garden_plot",
+        "effects": {
+          "morale_bonus_radius": 6,
+          "morale_bonus_value": 0.06,
+          "water_consumption_liters_per_tick": 0.1,
+          "growth_period_ticks": 100,
+          "notes": "Passive morale boost after 100 tick growth period. Low water consumption. Requires botany_bio 3+ to tend."
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "NASA Veggie experiments showed crew morale improved significantly when tending plants. The Japanese concept of 'forest bathing' (shinrin-yoku) reduces stress hormones. ISS astronauts report that green plants are their strongest visual connection to Earth."
+    },
+    "game_set": {
+      "tier": 1,
+      "display_name": "Strategy Game Set",
+      "description": "A carved basalt chess/go set with iron piece markers. Provides competitive social interaction that builds cognitive sharpness and interpersonal bonds. Two agents playing gain morale and mutual trust.",
+      "materials": {
+        "basalt": 6,
+        "iron_ore": 2
+      },
+      "base_duration_ticks": 3,
+      "min_engineering": 0,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "item",
+        "item_id": "game_set",
+        "effects": {
+          "morale_bonus_per_game": 0.04,
+          "trust_bonus_per_game": 0.02,
+          "game_duration_ticks": 4,
+          "requires_two_players": true,
+          "cognitive_maintenance": true,
+          "weight_kg": 3.0,
+          "notes": "Playing maintains cognitive sharpness (reduces cognitive_impairment by 5% for 50 ticks after playing). Requires 2 agents."
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "Board games have been found in every ancient civilization. ISS carries chess sets. Antarctic stations use games as primary social activity during winter-over. Cognitive engagement prevents deconditioning."
+    },
+    "personal_journal_station": {
+      "tier": 2,
+      "display_name": "Personal Journal & Logging Station",
+      "description": "A dedicated writing/recording area with smoothed basalt tablets and iron stylus. Agents recording experiences here process trauma and maintain psychological resilience. This is where reflection happens — literally and figuratively.",
+      "materials": {
+        "basalt": 5,
+        "iron_ore": 3,
+        "insulated_fabric": 1
+      },
+      "base_duration_ticks": 5,
+      "min_engineering": 0,
+      "requires_tool": true,
+      "requires_structure": null,
+      "output": {
+        "type": "structure",
+        "structure_id": "personal_journal_station",
+        "effects": {
+          "morale_restore_per_use": 0.06,
+          "trauma_processing": true,
+          "reflection_quality_bonus": 1.3,
+          "use_duration_ticks": 2,
+          "notes": "Agents using this gain 30% better reflection outputs (more insightful LLM-generated reflections). Also reduces morale loss from deaths of teammates by 30%."
+        }
+      },
+      "colony_contribution": null,
+      "real_world_basis": "Journaling is a proven psychological intervention. NASA astronaut diaries are studied for psychological insights. Expressive writing reduces intrusive thoughts and improves immune function (Pennebaker, 1997)."
+    },
+    "_comment_tier_3": "=== TIER 3: ADVANCED COLONY INFRASTRUCTURE ===",
+    "isru_o2_unit": {
+      "tier": 3,
+      "display_name": "ISRU Oxygen Production Unit",
+      "description": "A roughly 415 kg, 6 kg/day PEM water-electrolysis skid with a qualified membrane stack, two pump trains, buffer vessels, thermal loop, controls and pressure-tested hookups.",
+      "materials": {
+        "electrolysis_stack": 1,
+        "pump_compressor_module": 2,
+        "thermal_control_loop": 1,
+        "pressure_vessel_section": 2,
+        "structural_truss_section": 1,
+        "power_cable_harness": 2,
+        "electronic_component": 4,
+        "metal_pipe": 8
+      },
+      "base_duration_ticks": 1920,
+      "construction": {
+        "work_person_hours": 40,
+        "recommended_crew": 4,
+        "phases": ["foundation", "process_skids", "gas_and_water_manifolds", "thermal_loop", "power_and_controls", "leak_test", "hot_commissioning"]
+      },
+      "min_engineering": 6,
+      "requires_tool": true,
+      "requires_structure": null,
+      "manufacturing_operations": ["site_foundation", "mechanical_installation", "electrical_integration", "proof_test", "commissioning"],
+      "mass_budget_kg": {
+        "input_total_kg": 415.2,
+        "delivered_core_mass_kg": 0.0,
+        "output_total_kg": 415.2,
+        "process_loss_kg": 0.0
+      },
+      "output": {
+        "type": "structure",
+        "structure_id": "isru_o2_unit",
+        "effects": {
+          "o2_production_kg_per_day": 6.0,
+          "power_consumption_w": 4000,
+          "feedstock": "liquid_water",
+          "water_consumption_kg_per_day": 6.75,
+          "h2_byproduct_kg_per_day": 0.75
+        }
+      },
+      "colony_contribution": {
+        "oxygen_production": 6.0
+      },
+      "maintenance": {
+        "interval_ticks": 4032,
+        "repair_materials": {
+          "electronic_component": 1,
+          "power_cable_harness": 1
+        },
+        "degradation_per_missed_maintenance": 0.1
+      },
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/api/citations/20180006265/downloads/20180006265.pdf",
+        "basis": "NASA ISS OGS produces about 5.4 kg O2/day at 3.6 kW. Water electrolysis fixes the 6.0:0.75 kg/day O2:H2 output and 6.75 kg/day water input by mass conservation.",
+        "field_nonmanufacturable_inputs": []
+      },
+      "real_world_basis": "NASA MOXIE produced only grams per hour at roughly 300 W, while NASA describes a full-scale propellant system as about 1,000 kg and roughly 200 times MOXIE production. A 6 kg/day plant must therefore be a substantial multi-stack industrial installation with kilowatt-scale process heat and compression."
+    },
+    "habitat_module": {
+      "tier": 3,
+      "display_name": "Pressurized Habitat Module",
+      "description": "A twelve-person long-duration prefab pressure core with an integrated water/polyethylene-lined storm-safe section. The delivered hull is not usable on arrival: robots position it and the crew installs local foundation, bulk regolith shielding, ECLSS distribution, power, thermal interfaces and performs pressure/radiation commissioning tests.",
+      "materials": {
+        "preintegrated_habitat_core": 1,
+        "integrated_habitat_storm_vault_liner": 1,
+        "pressure_vessel_section": 12,
+        "structural_truss_section": 20,
+        "thermal_control_loop": 6,
+        "power_cable_harness": 8,
+        "composite_panel": 20,
+        "reduced_iron_ingot": 40,
+        "glass_pane": 8,
+        "insulated_fabric": 40,
+        "electronic_component": 12,
+        "machined_bolts_fasteners": 240,
+        "regolith": 12000
+      },
+      "base_duration_ticks": 2160,
+      "construction": {
+        "work_person_hours": 180,
+        "recommended_crew": 3,
+        "phases": ["foundation", "primary_structure", "pressure_shell", "storm_safe_section", "bulk_regolith_shielding", "thermal_control", "eclss_and_power", "interior_fitout", "pressure_test", "radiation_acceptance", "commissioning"]
+      },
+      "min_engineering": 7,
+      "requires_tool": true,
+      "requires_structure": null,
+      "manufacturing_operations": ["site_foundation", "heavy_module_positioning", "pressure_integration", "utility_hookup", "pressure_test", "commissioning"],
+      "output": {
+        "type": "structure",
+        "structure_id": "habitat_module",
+        "effects": {
+          "capacity_persons": 12,
+          "temperature_stress_reduction": 0.95,
+          "flare_damage_reduction": 0.95,
+          "radiation_reduction_factor": 0.02,
+          "rest_efficiency_bonus": 1.8,
+          "hygiene_facility": true,
+          "full_hygiene_restore": true,
+          "light_radius_units": 8,
+          "power_consumption_w": 15000
+        }
+      },
+      "colony_contribution": {
+        "shelter_capacity": 12,
+        "hazard_protection": 12
+      },
+      "maintenance": {
+        "interval_ticks": 8640,
+        "repair_materials": {
+          "composite_panel": 2,
+          "electronic_component": 1,
+          "insulated_fabric": 1
+        },
+        "degradation_per_missed_maintenance": 0.1
+      },
+      "real_world_basis": "NASA Mars habitat studies place long-duration habitat dry masses in the tens of tonnes and use water, hydrogen-rich polymers and local regolith as shielding. Each commissioned habitat therefore includes a protected internal storm-safe section for its twelve occupants; a second free-standing shelter would duplicate pressure volume, access, utilities and shielding work."
+    },
+    "power_distribution_grid": {
+      "tier": 3,
+      "display_name": "Surface Power Management & Distribution Node",
+      "description": "A field PMAD node with routed power/data harnesses, protected switchgear, bidirectional converters, isolation and load shedding. The lander's pre-integrated input accepts one starter solar wing; each node lets up to twenty-four field arrays feed the common bus, and harsher low-flux planets therefore require a second node. It does not create energy: converter and cable losses leave about 95% of routed array energy usable.",
+      "materials": {
+        "structural_truss_section": 1,
+        "power_cable_harness": 12,
+        "power_conditioning_unit_core": 2,
+        "electronic_component": 4,
+        "reduced_iron_ingot": 8,
+        "machined_bolts_fasteners": 48,
+        "rope_cordage": 2
+      },
+      "base_duration_ticks": 1440,
+      "construction": {
+        "work_person_hours": 60,
+        "recommended_crew": 3,
+        "phases": ["foundation_and_enclosure", "cable_route_deployment", "switchgear_integration", "source_and_load_connections", "insulation_test", "energization_and_load_shed_test"]
+      },
+      "min_engineering": 6,
+      "min_physics": 4,
+      "requires_tool": true,
+      "requires_structure": null,
+      "manufacturing_operations": ["site_foundation", "cable_deployment", "electrical_integration", "insulation_test", "commissioning"],
+      "mass_budget_kg": {
+        "input_total_kg": 315.8,
+        "delivered_core_mass_kg": 24.0,
+        "output_total_kg": 339.8,
+        "process_loss_kg": 0.0
+      },
+      "output": {
+        "type": "structure",
+        "structure_id": "power_distribution_grid",
+        "effects": {
+          "power_distribution_efficiency": 0.95,
+          "max_connected_solar_arrays": 24,
+          "enables_power_sharing": true,
+          "isolation_and_load_shedding": true,
+          "notes": "Pools field-array output after explicit 5% PMAD/cable loss; the starter lander input remains directly connected."
+        }
+      },
+      "colony_contribution": {
+        "energy_infrastructure": 0,
+        "notes": "Distribution and fault isolation only; this node contributes no generated kilowatts."
+      },
+      "maintenance": {
+        "interval_ticks": 8640,
+        "repair_materials": {
+          "power_cable_harness": 1,
+          "electronic_component": 1
+        },
+        "degradation_per_missed_maintenance": 0.1
+      },
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/citations/20220004165",
+        "basis": "NASA surface-microgrid studies connect islanded sources and loads through cables, converters, switchgear and controls; representative bidirectional converters are 95% efficient and distribution adds losses rather than energy.",
+        "field_nonmanufacturable_inputs": ["power_conditioning_unit_core"]
+      },
+      "real_world_basis": "A surface microgrid provides sharing, isolation, redundancy and controlled expansion. It is a several-hundred-kilogram routed electrical installation, not a small object that boosts every generator by twenty percent."
+    },
+    "communications_array": {
+      "tier": 3,
+      "display_name": "Long-Range Communications Array",
+      "description": "A steerable surface-to-orbit high-gain antenna, RF transceiver, amplifier, mast, cabling and pointing controls built around the qualified emergency-beacon radio. It maintains telemetry and the final landing-clearance link to the orbiting colony ship; it is not a miniature Earth Deep Space Network station.",
+      "materials": {
+        "structural_truss_section": 1,
+        "composite_panel": 4,
+        "power_cable_harness": 2,
+        "electronic_component": 5,
+        "reduced_iron_ingot": 8,
+        "machined_bolts_fasteners": 32,
+        "rope_cordage": 2,
+        "emergency_beacon_parts": 1
+      },
+      "base_duration_ticks": 960,
+      "construction": {
+        "work_person_hours": 40,
+        "recommended_crew": 3,
+        "phases": ["foundation_and_mast", "reflector_and_gimbal", "rf_and_power_cabling", "pointing_calibration", "orbital_link_test"]
+      },
+      "min_engineering": 7,
+      "min_physics": 5,
+      "requires_tool": true,
+      "requires_item": "emergency_beacon_parts",
+      "requires_structure": "power_distribution_grid",
+      "manufacturing_operations": ["site_foundation", "mechanical_installation", "rf_integration", "pointing_calibration", "commissioning"],
+      "mass_budget_kg": {
+        "input_total_kg": 181.4,
+        "delivered_core_mass_kg": 5.0,
+        "output_total_kg": 186.4,
+        "process_loss_kg": 0.0
+      },
+      "output": {
+        "type": "structure",
+        "structure_id": "communications_array",
+        "effects": {
+          "long_range_communication": true,
+          "orbit_contact_enabled": true,
+          "power_consumption_w": 150,
+          "notes": "Consumes the qualified beacon radio once. Range and landing clearance exist only while the PMAD node and 150 W communications load are powered."
+        }
+      },
+      "colony_contribution": {
+        "communications": true,
+        "readiness_cap_without": 90,
+        "notes": "Colony readiness cannot exceed 90% without this structure. Required to signal the colony ship."
+      },
+      "maintenance": {
+        "interval_ticks": 8640,
+        "repair_materials": {
+          "electronic_component": 1,
+          "power_cable_harness": 1
+        },
+        "degradation_per_missed_maintenance": 0.1
+      },
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/api/citations/19930008975/downloads/19930008975.pdf",
+        "basis": "NASA relay architectures use a lander-to-orbiter radio link, with the orbiter carrying the deep-space Earth link. High-gain operation requires an RF chain, amplifier, pointing hardware and electrical power.",
+        "field_nonmanufacturable_inputs": ["emergency_beacon_parts"]
+      },
+      "real_world_basis": "The surface array talks to the colony ship in orbit; that spacecraft relays onward. A completed but unpowered antenna provides neither expedition coverage nor landing clearance."
+    },
+    "landing_zone": {
+      "tier": 3,
+      "display_name": "Certified Colony Landing Zone",
+      "description": "A surveyed, graded and compacted landing ellipse with blast-resistant berms, powered navigation aids and an independently checked obstacle map. The advance-crew lander footprint is not automatically certified for the much larger civilian vehicle.",
+      "materials": {
+        "landing_navigation_core": 1,
+        "regolith": 10000,
+        "basalt": 2000,
+        "structural_truss_section": 4,
+        "power_cable_harness": 10,
+        "electronic_component": 2,
+        "machined_bolts_fasteners": 80
+      },
+      "base_duration_ticks": 1440,
+      "construction": {
+        "work_person_hours": 120,
+        "recommended_crew": 2,
+        "phases": ["terrain_survey", "grading_and_compaction", "berm_construction", "beacon_and_power_installation", "obstacle_survey", "landing_certification"]
+      },
+      "min_engineering": 5,
+      "min_physics": 3,
+      "requires_tool": true,
+      "requires_structure": "power_distribution_grid",
+      "manufacturing_operations": ["terrain_grading", "civil_construction", "electrical_integration", "survey", "commissioning"],
+      "mass_budget_kg": {
+        "input_total_kg": 21161.6,
+        "delivered_core_mass_kg": 500.0,
+        "output_total_kg": 21661.6,
+        "process_loss_kg": 0.0
+      },
+      "output": {
+        "type": "structure",
+        "structure_id": "landing_zone",
+        "effects": {
+          "landing_zone_certified": true,
+          "power_consumption_w": 500,
+          "rated_arrival_population": 106
+        }
+      },
+      "colony_contribution": null,
+      "maintenance": {
+        "interval_ticks": 8640,
+        "repair_materials": {
+          "electronic_component": 1,
+          "power_cable_harness": 1,
+          "regolith": 100
+        },
+        "degradation_per_missed_maintenance": 0.1
+      },
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/api/citations/19930008975/downloads/19930008975.pdf",
+        "basis": "The independently surveyed 500 m by 300 m planning ellipse is graded from conserved local regolith and basalt, kept roughly 2 km from habitation behind a 1 km exclusion strip, and served by ten 200 m field power/data harness sections. The serialized navigation core remains finite delivered hardware.",
+        "field_nonmanufacturable_inputs": ["landing_navigation_core"]
+      },
+      "real_world_basis": "Precision landing needs current terrain knowledge, hazard clearance and a powered navigation reference. The five-by-three 100 m planning-cell ellipse sits about 2 km from the occupied campus behind a 1 km blast/debris exclusion strip. Ten 200 m low-power field harness sections route redundant beacon power; surface preparation and berms mitigate ejecta and blast damage, and certification remains a physical mission gate rather than free lander infrastructure."
+    },
+    "_comment_tier_4": "=== TIER 4: COLONY-SCALE SYSTEMS (endgame) ===",
+    "laboratory_module": {
+      "tier": 4,
+      "display_name": "Scientific Laboratory Module",
+      "description": "A pressurized research laboratory with material analysis equipment, biological containment, and computing capability. Enables advanced research: pharmaceutical production, geological deep-survey, atmospheric analysis, and genetic study of local biology (if any). Produces research data that improves all other systems by 15%.",
+      "materials": {
+        "composite_panel": 8,
+        "reduced_iron_ingot": 15,
+        "glass_pane": 8,
+        "electronic_component": 6,
+        "laboratory_instrument_core": 1,
+        "insulated_fabric": 4
+      },
+      "base_duration_ticks": 60,
+      "min_engineering": 6,
+      "min_physics": 6,
+      "requires_tool": true,
+      "requires_structure": "habitat_module",
+      "output": {
+        "type": "structure",
+        "structure_id": "laboratory_module",
+        "effects": {
+          "research_speed_multiplier": 2.0,
+          "pharmaceutical_production": true,
+          "deep_survey_radius_units": 200,
+          "system_efficiency_bonus": 0.15,
+          "power_consumption_w": 250,
+          "notes": "All connected structures gain 15% efficiency bonus. Enables pharmaceutical production (antidotes, stimulants). Deep survey reveals resources in 200-unit radius."
+        }
+      },
+      "mass_budget_kg": {
+        "input_total_kg": 213.8,
+        "delivered_core_mass_kg": 30.0,
+        "output_total_kg": 243.8,
+        "process_loss_kg": 0.0
+      },
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/api/citations/20210024855/downloads/BVAD_2.15.22-final.pdf",
+        "basis": "The crew constructs the enclosure and utilities around a finite, calibrated instrument core. The laboratory cannot bootstrap precision analytical optics, detectors or clean-room instrumentation from regolith.",
+        "field_nonmanufacturable_inputs": ["laboratory_instrument_core"]
+      },
+      "colony_contribution": {
+        "notes": "Improves all other colony contributions by 15% when connected to power grid."
+      },
+      "maintenance": {
+        "interval_ticks": 4032,
+        "repair_materials": {
+          "electronic_component": 2,
+          "glass_pane": 2
+        },
+        "degradation_per_missed_maintenance": 0.15
+      },
+      "real_world_basis": "ISS Destiny Laboratory and Columbus modules. Mars-adapted designs from NASA Mars Design Reference Architecture 5.0."
+    },
+    "pharmaceutical_kit": {
+      "tier": 4,
+      "display_name": "Pharmaceutical Kit",
+      "description": "A clinician compounds and quality-checks one delivered, stability-controlled reagent pack into a treatment kit. It can support a course of antibiotics, analgesia or decorporation therapy for specific internal contaminants; it cannot erase prior whole-body radiation dose or cure infection instantly.",
+      "materials": {
+        "pharmaceutical_reagent_pack": 1
+      },
+      "base_duration_ticks": 24,
+      "min_medical": 5,
+      "min_engineering": 2,
+      "requires_tool": true,
+      "requires_structure": "laboratory_module",
+      "output": {
+        "type": "item",
+        "item_id": "pharmaceutical_kit",
+        "effects": {
+          "supports_internal_contamination_protocol": true,
+          "supports_antibiotic_course": true,
+          "supports_analgesia": true,
+          "single_use": true,
+          "weight_kg": 0.8,
+          "notes": "Single-use medical kit. Must choose one treatment per kit. High medical competency required to administer safely."
+        }
+      },
+      "mass_budget_kg": {
+        "input_total_kg": 0.0,
+        "delivered_core_mass_kg": 0.8,
+        "output_total_kg": 0.8,
+        "process_loss_kg": 0.0
+      },
+      "realism": {
+        "source_url": "https://ntrs.nasa.gov/api/citations/20210024855/downloads/BVAD_2.15.22-final.pdf",
+        "basis": "A stability-controlled reagent pack is finite delivered cargo. The field laboratory may select, compound and quality-check one treatment course but neither creates active pharmaceutical ingredients from regolith nor reverses absorbed radiation dose.",
+        "field_nonmanufacturable_inputs": ["pharmaceutical_reagent_pack"]
+      },
+      "colony_contribution": null,
+      "real_world_basis": "Space missions carry stability-controlled pharmaceuticals. DTPA-class decorporation applies only to particular internal radionuclides; it does not reverse externally absorbed dose. Field laboratories may compound delivered reagents but do not synthesize a complete pharmacy from arbitrary regolith."
+    },
+    "advanced_eclss": {
+      "tier": 4,
+      "display_name": "Advanced ECLSS (Environmental Control & Life Support)",
+      "description": "A fully integrated life support system combining O2 generation, CO2 scrubbing, advanced water recovery (98% design recovery), temperature regulation, and atmospheric monitoring. One scaled unit supports 20 people.",
+      "materials": {
+        "composite_panel": 12,
+        "reduced_iron_ingot": 30,
+        "electronic_component": 8,
+        "metal_pipe": 6,
+        "glass_pane": 6,
+        "insulated_fabric": 4
+      },
+      "base_duration_ticks": 100,
+      "min_engineering": 8,
+      "min_physics": 5,
+      "requires_tool": true,
+      "requires_structure": "laboratory_module",
+      "output": {
+        "type": "structure",
+        "structure_id": "advanced_eclss",
+        "effects": {
+          "o2_production_kg_per_day": 12.0,
+          "co2_scrubbing_enabled": true,
+          "water_recycling_efficiency": 0.98,
+          "wastewater_treatment_capacity_liters_per_day": 400.0,
+          "temperature_regulation_c": 22,
+          "capacity_persons": 20,
+          "power_consumption_w": 500
+        }
+      },
+      "colony_contribution": {
+        "oxygen_production": 12.0,
+        "water_supply": 400.0,
+        "shelter_capacity": 20
+      },
+      "maintenance": {
+        "interval_ticks": 2016,
+        "repair_materials": {
+          "electronic_component": 2,
+          "insulated_fabric": 2,
+          "power_cable_harness": 1
+        },
+        "degradation_per_missed_maintenance": 0.15
+      },
+      "real_world_basis": "ISS-class ECLSS provides O2 via electrolysis, removes CO2 and recovers water. NASA's brine-processor milestone demonstrated 98% total water recovery; the 20-person capacity here is an explicitly scaled surface-module design rather than a claim about one ISS rack."
+    }
+  }
+}

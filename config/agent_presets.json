@@ -1,0 +1,265 @@
+{
+  "_meta": {
+    "description": "Emergency Site Activation Team profiles and landing module inventory. The colony ship is damaged on arrival and can keep 100 people alive in orbit for approximately one year. It immediately sends six astronauts and twenty-six cargo landers to the surface; they must turn the crated, non-operational equipment into a tested settlement before the forced day-360 landing.",
+    "competency_rules": {
+      "distribution": "Every domain (engineering, medical, physics, botany_bio, leadership_social) has at least one agent scoring 8+. Every agent has at least 2 domains at 5+. No single-domain specialists — all agents are multidisciplinary.",
+      "scoring": "0-10 scale. Affects LLM system prompt (personality/expertise), RAG access depth, and action modifiers.",
+      "immutable": true
+    },
+    "genome_rules": {
+      "distribution": "Randomly generated within bounds. Each stat is 3-9 (no extremes). Total points per agent: 25-30.",
+      "immutable": true
+    }
+  },
+
+  "agents": [
+    {
+      "id": "agent_01",
+      "name": "Dr. Elena Vasquez",
+      "background": "Structural engineer and materials scientist. 12 years of experience in extreme-environment construction, including Antarctic research stations and deep-sea habitats. Natural leader who communicates clearly under pressure.",
+      "anthropometrics": {"height_cm": 168.0, "mass_kg": 64.0, "foot_length_cm": 24.8, "shoe_size_eu": 39},
+      "genome": {
+        "strength": 6,
+        "agility": 5,
+        "endurance": 7,
+        "perception": 5,
+        "immunity": 6
+      },
+      "competency": {
+        "engineering": 9,
+        "medical": 4,
+        "physics": 6,
+        "botany_bio": 3,
+        "leadership_social": 7
+      },
+      "personality_traits": ["methodical", "pragmatic", "protective", "blunt"],
+      "notes": "Primary builder. High engineering makes her essential for Tier 2-3 structures. Leadership skill helps coordinate team. Weak in botany — depends on others for food systems."
+    },
+    {
+      "id": "agent_02",
+      "name": "Dr. Kwame Asante",
+      "background": "Physician and field medic with tropical disease research experience. Served 3 years with Médecins Sans Frontières in conflict zones. Calm under extreme stress, skilled at triage and improvised medicine.",
+      "anthropometrics": {"height_cm": 181.0, "mass_kg": 78.0, "foot_length_cm": 27.5, "shoe_size_eu": 43},
+      "genome": {
+        "strength": 4,
+        "agility": 6,
+        "endurance": 6,
+        "perception": 8,
+        "immunity": 8
+      },
+      "competency": {
+        "engineering": 3,
+        "medical": 9,
+        "physics": 5,
+        "botany_bio": 6,
+        "leadership_social": 5
+      },
+      "personality_traits": ["calm", "empathetic", "cautious", "stubborn_when_right"],
+      "notes": "Team medic. Critical for treating radiation sickness, injuries, and disease. High perception genome makes him excellent at early hazard detection. Cross-trained in botany (medicinal plants, biological systems). Physically the weakest — needs protection."
+    },
+    {
+      "id": "agent_03",
+      "name": "Dr. Yuki Tanaka",
+      "background": "Planetary physicist and geochemist. Published researcher in exoplanet atmospheric modeling and in-situ resource assessment. Analytical mind, sometimes overly focused on data at the expense of social dynamics.",
+      "anthropometrics": {"height_cm": 160.0, "mass_kg": 54.0, "foot_length_cm": 23.5, "shoe_size_eu": 37},
+      "genome": {
+        "strength": 5,
+        "agility": 4,
+        "endurance": 5,
+        "perception": 9,
+        "immunity": 5
+      },
+      "competency": {
+        "engineering": 5,
+        "medical": 3,
+        "physics": 9,
+        "botany_bio": 5,
+        "leadership_social": 4
+      },
+      "personality_traits": ["analytical", "curious", "introverted", "risk_averse"],
+      "notes": "Science officer. Highest physics score means best understanding of planetary hazards (flare prediction, seismic patterns). Highest perception genome for environmental awareness. Essential for strategic planning but poor at social coordination. Moderate engineering allows basic contributions to construction."
+    },
+    {
+      "id": "agent_04",
+      "name": "Dr. Amara Okafor",
+      "background": "Astrobiologist and agricultural systems engineer. Designed closed-loop biological life support prototypes for the ESA. Passionate about sustainable systems, strong communicator, and natural team motivator.",
+      "anthropometrics": {"height_cm": 173.0, "mass_kg": 68.0, "foot_length_cm": 25.5, "shoe_size_eu": 40},
+      "genome": {
+        "strength": 5,
+        "agility": 7,
+        "endurance": 6,
+        "perception": 6,
+        "immunity": 7
+      },
+      "competency": {
+        "engineering": 5,
+        "medical": 5,
+        "physics": 4,
+        "botany_bio": 9,
+        "leadership_social": 8
+      },
+      "personality_traits": ["optimistic", "collaborative", "creative", "idealistic"],
+      "notes": "Food systems lead and team morale officer. Highest botany makes her essential for greenhouse design and food production. Strong leadership for team coordination and conflict resolution. Cross-trained in engineering and medical — versatile support role."
+    },
+    {
+      "id": "agent_05",
+      "name": "Cmdr. Nikolai Volkov",
+      "background": "Former military logistics officer and expedition leader. Led 3 Arctic survival missions and 2 simulated Mars habitat studies. Decisive, mission-focused, occasionally authoritarian. The designated team commander.",
+      "anthropometrics": {"height_cm": 188.0, "mass_kg": 92.0, "foot_length_cm": 29.0, "shoe_size_eu": 45},
+      "genome": {
+        "strength": 9,
+        "agility": 6,
+        "endurance": 8,
+        "perception": 5,
+        "immunity": 5
+      },
+      "competency": {
+        "engineering": 6,
+        "medical": 3,
+        "physics": 3,
+        "botany_bio": 2,
+        "leadership_social": 9
+      },
+      "personality_traits": ["decisive", "disciplined", "mission_focused", "authoritarian"],
+      "notes": "Team leader and primary laborer. Strongest genome (strength 9, endurance 8) makes him the most efficient at gathering and construction. Highest leadership enables team coordination and crisis management. Weakest in science domains — relies heavily on others for technical decisions. His authoritarian personality may create friction with more collaborative agents."
+    },
+    {
+      "id": "agent_06",
+      "name": "Eng. Leila Haddad",
+      "background": "Robotics, autonomy, and field-systems engineer. Led validation of supervised autonomous excavators, modular assembly manipulators, and radiation-hardened control systems in polar and vacuum-chamber analog campaigns. Specializes in fault isolation, safe robot tasking, and maintainable common-part fleets.",
+      "anthropometrics": {"height_cm": 170.0, "mass_kg": 66.0, "foot_length_cm": 25.2, "shoe_size_eu": 40},
+      "genome": {
+        "strength": 5,
+        "agility": 7,
+        "endurance": 6,
+        "perception": 7,
+        "immunity": 5
+      },
+      "competency": {
+        "engineering": 8,
+        "medical": 4,
+        "physics": 7,
+        "botany_bio": 4,
+        "leadership_social": 6
+      },
+      "personality_traits": ["systems_thinker", "patient", "safety_focused", "adaptive"],
+      "notes": "Robotics and commissioning lead. Supervises autonomous construction, diagnoses fleet faults, and validates pressure, power, and control interfaces. Cross-trained in planetary physics and leadership; she is not a magic automation multiplier and robots still require power, inspection, spares, and bounded task authorization."
+    }
+  ],
+
+  "capsule_inventory": {
+    "description": "Shared field provisions unloaded from the planned crew lander. All agents start at the landing hub.",
+    "items": {
+      "emergency_rations": {
+        "quantity": 60,
+        "unit": "meals",
+        "description": "Vacuum-sealed calorie-dense food packs. 1 unit = 1 meal (~700 kcal). 3 meals/day/agent.",
+        "lasts_days_for_6_agents": 3.3
+      },
+      "water_packs": {
+        "quantity": 96,
+        "unit": "liters",
+        "description": "Sealed water containers. 6L/agent/day for drinking and minimal hygiene.",
+        "lasts_days_for_6_agents": 2.7
+      },
+      "oxygen_canisters": {
+        "quantity": 36,
+        "unit": "canisters",
+        "description": "Pressurized O2 supply. 1 canister = 8 hours of breathing for 1 agent. Only consumed on planets without breathable atmosphere.",
+        "lasts_days_for_6_agents": 2.0
+      },
+      "emergency_blankets": {
+        "quantity": 6,
+        "unit": "blankets",
+        "description": "Reflective thermal emergency blankets. Reduce temperature_stress gain by 25%. One per agent.",
+        "durability": "permanent_but_fragile",
+        "fragile_damage_threshold": "destroyed if caught in flare/storm without shelter"
+      },
+      "multitool_kit": {
+        "quantity": 3,
+        "unit": "kits",
+        "description": "Multi-purpose tool kits required for gathering and crafting. Shared resource — agents must coordinate tool usage until hand_tools are crafted.",
+        "durability": "permanent"
+      },
+      "electronics_salvage": {
+        "quantity": 15,
+        "unit": "components",
+        "description": "Pre-packed electronic components from the landing module's mission supplies. IRREPLACEABLE — cannot be mined or crafted from local materials. Required for Tier 2-3 recipes (solar panels, ISRU units, habitat modules). The most strategically critical resource in the mission.",
+        "craftable": false,
+        "mineable": false
+      },
+      "medical_supplies": {
+        "quantity": 10,
+        "unit": "treatments",
+        "description": "Basic medical supplies (antiseptic, bandages, radiation meds). 1 unit = 1 treatment session. Medical station structure doubles effectiveness and halves consumption.",
+        "craftable": false
+      },
+      "sterile_iv_fluid_bags": {
+        "quantity": 6,
+        "unit": "one_liter_bags",
+        "description": "Sealed 1 L isotonic crystalloid bags. The sterile fluid is the administered water mass; habitat potable water cannot substitute for an unopened IV fluid bag.",
+        "craftable": false
+      },
+      "iv_io_administration_sets": {
+        "quantity": 6,
+        "unit": "single_use_sets",
+        "description": "Sterile single-use tubing plus IV catheter and emergency IO access components. One set is consumed for each invasive rehydration session.",
+        "craftable": false
+      },
+      "portable_scanner": {
+        "quantity": 1,
+        "unit": "device",
+        "description": "Rechargeable 100 Wh handheld shallow-geology scanner. Measures only the current field station and immediately adjacent cells; a test pit lets it inspect the next layer from the exposed face. Returns to lander power when its battery is low.",
+        "battery_capacity_wh": 100,
+        "active_scan_duration_minutes": 20,
+        "charge_used_per_scan_pct": 8,
+        "scan_radius_cells": 1,
+        "penetration_layers": 1,
+        "reveals": ["shallow_resource_signals", "exposed_test_pit_layers", "hazard_zones"]
+      },
+      "emergency_beacon": {
+        "quantity": 1,
+        "unit": "set",
+        "description": "One serialized surface-to-orbit radio core held in the central depot. It is consumed exactly once when the crew integrates the powered high-gain communications array after commissioning the surface PMAD node.",
+        "assembled": false,
+        "assembly_requirements": {
+          "power_distribution_grid": 1,
+          "min_engineering": 7,
+          "min_physics": 5
+        }
+      }
+    },
+    "materials": {
+      "reduced_iron_ingot": 12,
+      "machined_bolts_fasteners": 16,
+      "vacuum_gasket_seal": 8,
+      "finned_heat_sink": 2
+    },
+    "random_crates": {
+      "description": "1-3 additional supply crates deployed via parachute around the landing zone. Landing dispersal scatters them within 50 units. Adds replayability and early exploration incentive.",
+      "count_range": [1, 3],
+      "scatter_radius": 50,
+      "contents_per_crate": {
+        "material_options": ["regolith", "iron_ore", "silica_sand", "water_ice", "basalt"],
+        "quantity_range": [10, 30]
+      }
+    }
+  },
+
+  "starting_conditions": {
+    "spawn_pattern": "clustered",
+    "spawn_description": "All 6 agents disembark from the landing module within a 10-unit radius of the touchdown site. Landing zone is pre-selected for the planet's most habitable biome (terminator_ridge for tidally locked planets, temperate_plains for others) based on orbital survey data.",
+    "spawn_biome_selection": {
+      "tidally_locked_gradient": "terminator",
+      "procedural_noise": "most_habitable_biome"
+    },
+    "initial_needs": {
+      "hunger": 85,
+      "thirst": 85,
+      "energy": 70,
+      "hygiene": 60,
+      "temperature_stress": 50,
+      "notes": "Agents arrive slightly depleted from the multi-hour descent and landing procedure. Adrenaline and exertion during deceleration/landing ops burns energy. Not critical, but not full — forces early prioritization."
+    }
+  }
+}

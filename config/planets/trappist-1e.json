@@ -1,0 +1,230 @@
+{
+  "id": "trappist-1e",
+  "display_name": "TRAPPIST-1e",
+  "epistemic_model": {
+    "classification": "scenario-constrained synthetic surface realization",
+    "observed_parameters": ["transit orbital period", "transit radius", "transit-timing mass"],
+    "inferred_parameters": ["bulk density", "gravity", "equilibrium temperature"],
+    "scenario_assumptions": ["airless surface realization", "surface temperature map", "tidal geology", "biomes and mineral deposits", "surface radiation dose"],
+    "uncertainty_policy": "The airless surface is one explicit realization compatible with current constraints, not a claim that the actual planet is known to be airless."
+  },
+  "star": {
+    "name": "TRAPPIST-1",
+    "type": "M8V ultra-cool red dwarf",
+    "mass_solar": 0.089,
+    "luminosity_solar": 0.000553,
+    "distance_ly": 39.6,
+    "age_gyr": 7.6
+  },
+  "orbital": {
+    "semi_major_axis_au": 0.02928,
+    "orbital_period_days": 6.1,
+    "eccentricity": 0.005
+  },
+  "physical": {
+    "mass_earth": 0.692,
+    "radius_earth": 0.920,
+    "gravity_g": 0.93,
+    "density_gcc": 5.65,
+    "escape_velocity_kms": 9.2
+  },
+  "surface": {
+    "tidally_locked": true,
+    "day_length_hours": null,
+    "temp_substellar_c": 80,
+    "temp_terminator_c": -5,
+    "temp_antistellar_c": -90,
+    "equilibrium_temp_k": 251,
+    "solar_flux_relative_to_earth": 0.6
+  },
+  "atmosphere": {
+    "present": false,
+    "composition": null,
+    "surface_pressure_atm": null,
+    "notes": "JWST observations suggest no substantial hydrogen-rich atmosphere. Possible thin CO2 or N2 atmosphere, or none. Simulation assumes minimal/no atmosphere — agents require O2 production."
+  },
+  "geology": {
+    "bulk_composition": "Iron core (~25% by mass), silicate mantle (olivine, pyroxene, perovskite), possible water ice layer",
+    "core_type": "Iron-rich, possibly partially molten",
+    "mantle_minerals": [
+      "perovskite",
+      "magnesiowustite",
+      "olivine",
+      "enstatite"
+    ],
+    "surface_minerals": [
+      "basalt",
+      "iron_oxide",
+      "silicate_glass",
+      "olivine",
+      "regolith"
+    ],
+    "tectonic_activity": "Moderate — tidal stresses from close-in orbit create seismic activity at terminator zone",
+    "volcanism": "Possible limited volcanic activity near substellar point (tidal heating)"
+  },
+  "hazards": [
+    "stellar_flare",
+    "extreme_thermal_gradient",
+    "thin_atmosphere",
+    "seismic_terminator"
+  ],
+  "flare_profile": {
+    "flare_events_per_80_days": 42,
+    "average_flare_energy_erg": 1e30,
+    "superflare_probability_per_year": 0.15,
+    "uv_flux_relative_to_earth": 3.2,
+    "radiation_baseline_sv_per_hour": 0.0002,
+    "radiation_flare_sv_per_hour": 0.02,
+    "notes": "TRAPPIST-1 is moderately active. Flares deliver ~3x Earth's UV flux baseline. Superflares can temporarily increase surface radiation 100x."
+  },
+  "radiation_system": {
+    "enabled": true,
+    "model_status": "scenario_prior_not_surface_measurement",
+    "baseline_dose_sv_per_hour": 0.0002,
+    "baseline_dose_by_biome_sv_per_hour": {
+      "scorched_flats": 0.0008,
+      "basalt_plains": 0.0004,
+      "terminator_ridge": 0.0002,
+      "frost_expanse": 0.0001,
+      "deep_ice": 0.00005
+    },
+    "basis": "No atmosphere or magnetosphere is assumed. Planetary shadow reduces direct stellar-particle exposure toward the anti-stellar side; all rates are explicit scenario priors."
+  },
+  "world_generation": {
+    "type": "tidally_locked_gradient",
+    "substellar_point": "center",
+    "habitable_band": "terminator_ring",
+    "habitable_band_width_units": 300,
+    "map_size": 2000
+  },
+  "biomes": [
+    {
+      "id": "scorched_flats",
+      "name": "Scorched Flats",
+      "description": "Permanently sun-facing basaltic plains. Surface partially vitrified by constant stellar irradiation. Iron-rich deposits exposed by thermal fracturing.",
+      "temp_range_c": [
+        80,
+        200
+      ],
+      "zone": "substellar",
+      "traversable": true,
+      "survival_time_ticks_unprotected": 8,
+      "resources": {
+        "iron_ore": "rich",
+        "basalt": "abundant",
+        "chalcopyrite_ore": "moderate",
+        "silica_sand": "sparse",
+        "regolith": "moderate"
+      },
+      "hazard_modifiers": {
+        "flare_damage_multiplier": 2.0
+      }
+    },
+    {
+      "id": "basalt_plains",
+      "name": "Basalt Plains",
+      "description": "Transitional volcanic terrain between the scorched substellar point and the temperate terminator. Dark basaltic rock with sulfurous outgassing vents. Iron oxide gives the surface a rust-red appearance.",
+      "temp_range_c": [
+        10,
+        80
+      ],
+      "zone": "day_side",
+      "traversable": true,
+      "survival_time_ticks_unprotected": 24,
+      "resources": {
+        "basalt": "abundant",
+        "regolith": "abundant",
+        "silica_sand": "moderate",
+        "sulfur": "sparse",
+        "iron_ore": "moderate"
+      },
+      "hazard_modifiers": {
+        "flare_damage_multiplier": 1.5
+      }
+    },
+    {
+      "id": "terminator_ridge",
+      "name": "Terminator Ridge",
+      "description": "The narrow habitable band where day meets eternal night. Rugged terrain shaped by extreme thermal stress — fractured rock, steep ridgelines, and shallow caves formed by differential expansion. The most geologically active zone due to tidal stresses. Intermittent water condensation in sheltered crevices.",
+      "temp_range_c": [
+        -15,
+        15
+      ],
+      "zone": "terminator",
+      "traversable": true,
+      "survival_time_ticks_unprotected": null,
+      "resources": {
+        "regolith": "moderate",
+        "silica_sand": "moderate",
+        "olivine": "moderate",
+        "water_ice": "sparse",
+        "calcite": "sparse"
+      },
+      "hazard_modifiers": {
+        "flare_damage_multiplier": 0.8,
+        "seismic_injury_probability_per_eva_hour": 0.003,
+        "wind_speed_modifier": 1.35
+      }
+    },
+    {
+      "id": "frost_expanse",
+      "name": "Frost Expanse",
+      "description": "Permanently shadowed region near the anti-stellar hemisphere. Surface covered in CO2 frost and water ice deposits. Temperature drops sharply away from terminator. Occasional ice geysers where subsurface volatiles escape.",
+      "temp_range_c": [
+        -60,
+        -15
+      ],
+      "zone": "night_side_near",
+      "traversable": true,
+      "survival_time_ticks_unprotected": 16,
+      "resources": {
+        "water_ice": "abundant",
+        "regolith": "moderate",
+        "calcite": "sparse",
+        "graphite": "sparse"
+      },
+      "hazard_modifiers": {
+        "visibility_range_modifier": 0.55,
+        "movement_speed_modifier": 0.65,
+        "crevasse_injury_probability_per_eva_hour": 0.002
+      }
+    },
+    {
+      "id": "deep_ice",
+      "name": "Deep Ice",
+      "description": "The anti-stellar pole. Kilometers-thick ice sheet overlaying frozen volatiles (CO2, N2, possibly NH3). Extremely cold with zero stellar illumination. Rich in water ice and trapped carbon compounds, but conditions are near-lethal. Visibility near zero without artificial light.",
+      "temp_range_c": [
+        -120,
+        -60
+      ],
+      "zone": "anti_stellar",
+      "traversable": true,
+      "survival_time_ticks_unprotected": 6,
+      "resources": {
+        "water_ice": "very_abundant",
+        "graphite": "moderate"
+      },
+      "hazard_modifiers": {
+        "visibility_range_modifier": 0.3,
+        "movement_speed_modifier": 0.45,
+        "crevasse_injury_probability_per_eva_hour": 0.01
+      }
+    }
+  ],
+  "resource_modifiers": {
+    "scarcity_factor": 0.4,
+    "water_ice": "night_side_only",
+    "iron_ore": "day_side_concentrated",
+    "chalcopyrite_ore": "impact_exposed_day_side",
+    "notes": "Resources are geographically polarized — water on the cold side, metals on the hot side. Colony site on terminator must orchestrate expeditions to both extremes."
+  },
+  "difficulty_rating": 3,
+  "difficulty_label": "Hard",
+  "scientific_references": [
+    "Gillon et al. 2017 — TRAPPIST-1 system discovery (Nature 542, 456–460)",
+    "Grimm et al. 2018 — Mass/density measurements (Astronomy & Astrophysics 613, A68)",
+    "Agol et al. 2021 — Refined physical parameters (PSJ 2:1)",
+    "Ducrot et al. 2020 — TRAPPIST-1 habitability constraints",
+    "Lincowski et al. 2018 — Atmospheric modeling for TRAPPIST-1 planets"
+  ]
+}

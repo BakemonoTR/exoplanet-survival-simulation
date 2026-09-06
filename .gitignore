@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# Environment variables (API keys!)
+.env
+
+# Database files
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Logs
+data/*.log
+*.log
+diagnostic_stderr.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Scratch / temporary files
+scratch_*.js
+scratch_*.json
+
+# Reports (generated)
+reports/
+
+# Analysis (generated)
+analysis/
+
+# pip cache
+pip/
+
+# Gemini / Agent files
+.agents/
+.gemini/
+gemini_icin.txt
+HANDOFF_*.md

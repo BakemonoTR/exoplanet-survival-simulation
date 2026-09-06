@@ -1,0 +1,211 @@
+{
+  "id": "proxima-centauri-b",
+  "display_name": "Proxima Centauri b",
+  "epistemic_model": {
+    "classification": "scenario-constrained synthetic surface realization",
+    "observed_parameters": ["radial-velocity orbital period", "minimum mass"],
+    "inferred_parameters": ["radius", "bulk density", "gravity", "equilibrium temperature"],
+    "scenario_assumptions": ["tidal lock", "airless surface realization", "surface temperature map", "geology", "biomes and mineral deposits", "surface radiation dose"],
+    "uncertainty_policy": "The airless high-radiation world is a deliberately severe reproducible scenario, not a measured surface description of Proxima Centauri b."
+  },
+  "star": {
+    "name": "Proxima Centauri",
+    "type": "M5.5Ve red dwarf (flare star)",
+    "mass_solar": 0.122,
+    "luminosity_solar": 0.00155,
+    "distance_ly": 4.2465,
+    "age_gyr": 4.85
+  },
+  "orbital": {
+    "semi_major_axis_au": 0.04857,
+    "orbital_period_days": 11.186,
+    "eccentricity": 0.02
+  },
+  "physical": {
+    "mass_earth": 1.07,
+    "radius_earth": 1.03,
+    "gravity_g": 1.01,
+    "density_gcc": 5.5,
+    "escape_velocity_kms": 10.5
+  },
+  "surface": {
+    "tidally_locked": true,
+    "day_length_hours": null,
+    "temp_substellar_c": 60,
+    "temp_terminator_c": -20,
+    "temp_antistellar_c": -100,
+    "equilibrium_temp_k": 234,
+    "solar_flux_relative_to_earth": 0.65
+  },
+  "atmosphere": {
+    "present": false,
+    "composition": null,
+    "surface_pressure_atm": null,
+    "notes": "Proxima Centauri is a violent flare star. Extreme stellar wind (2000x solar) and frequent superflares likely stripped any primordial atmosphere long ago. The planet is modeled as an airless body with no atmospheric protection from radiation, UV, or micrometeorites."
+  },
+  "geology": {
+    "bulk_composition": "Iron core (possibly large, 30-65% by mass), silicate mantle (perovskite, olivine, enstatite). Fe/Si/Mg ratios similar to solar system.",
+    "core_type": "Large iron-rich core, possibly Mercury-like proportions",
+    "mantle_minerals": ["perovskite", "magnesiowustite", "olivine", "enstatite"],
+    "surface_minerals": ["irradiated_regolith", "iron_oxide", "basalt", "impact_glass", "chalcopyrite"],
+    "tectonic_activity": "Low — possible tidal heating provides some internal energy, but surface is primarily shaped by radiation processing and impact gardening",
+    "volcanism": "Minimal — possible cryovolcanism on night side (water/ammonia eruptions from subsurface)"
+  },
+  "hazards": ["extreme_stellar_flare", "lethal_radiation", "extreme_thermal_gradient", "micrometeorite"],
+  "flare_profile": {
+    "flare_events_per_80_days": 85,
+    "average_flare_energy_erg": 1e31,
+    "superflare_probability_per_year": 0.8,
+    "uv_flux_relative_to_earth": 15.0,
+    "radiation_baseline_sv_per_hour": 0.0005,
+    "radiation_flare_sv_per_hour": 0.05,
+    "lethal_cumulative_sv": 4.0,
+    "notes": "Proxima Centauri is one of the most violently active stars known. Major flares occur multiple times per week. In March 2016, a superflare increased the star's brightness by 1000x for ~10 seconds. Cumulative radiation exposure is the primary killer. Agents accumulate radiation dose (measured in Sieverts) — exceeding 4 Sv is lethal. Baseline radiation on the day side is already dangerous; during flares it becomes acutely lethal without shielding."
+  },
+  "radiation_system": {
+    "enabled": true,
+    "baseline_dose_per_tick": {
+      "irradiated_wastes": 0.008,
+      "scorched_regolith": 0.004,
+      "radiation_shadow_zone": 0.001,
+      "permafrost_expanse": 0.0005,
+      "frozen_abyss": 0.0002
+    },
+    "baseline_dose_sv_per_hour": 0.0005,
+    "baseline_dose_by_biome_sv_per_hour": {
+      "irradiated_wastes": 0.002,
+      "scorched_regolith": 0.001,
+      "radiation_shadow_zone": 0.0002,
+      "permafrost_expanse": 0.0001,
+      "frozen_abyss": 0.00005
+    },
+    "model_status": "scenario_prior_not_surface_measurement",
+    "flare_dose_multiplier": 25.0,
+    "shelter_reduction_factor": 0.05,
+    "lethal_cumulative_dose": 4.0,
+    "acute_sickness_threshold": 1.0,
+    "chronic_sickness_threshold": 2.0,
+    "notes": "Agents track cumulative radiation dose. >1.0 Sv: nausea, reduced performance. >2.0 Sv: chronic illness, permanent stat reduction. >4.0 Sv: death. Only heavy shielding (basalt/regolith walls) reduces dose during flares to survivable levels."
+  },
+  "world_generation": {
+    "type": "tidally_locked_gradient",
+    "substellar_point": "center",
+    "habitable_band": "terminator_ring",
+    "habitable_band_width_units": 200,
+    "map_size": 2000
+  },
+  "biomes": [
+    {
+      "id": "irradiated_wastes",
+      "name": "Irradiated Wastes",
+      "description": "The substellar hemisphere is exposed to intense stellar radiation and impact gardening. Irradiated regolith and impact glass overlie pre-existing iron-bearing and chalcopyrite-bearing crustal material exposed by impacts; radiation does not create or concentrate chemical elements. The dose rate is lethal without substantial shielding.",
+      "temp_range_c": [50, 150],
+      "zone": "substellar",
+      "traversable": true,
+      "survival_time_ticks_unprotected": 4,
+      "resources": {
+        "chalcopyrite_ore": "rich",
+        "iron_ore": "abundant",
+        "basalt": "abundant",
+        "regolith": "abundant"
+      },
+      "hazard_modifiers": {
+        "flare_damage_multiplier": 3.0,
+        "micrometeorite_suit_damage_probability_per_eva_hour": 0.005
+      }
+    },
+    {
+      "id": "scorched_regolith",
+      "name": "Scorched Regolith",
+      "description": "Transitional zone between the irradiated substellar point and the shadow zone. Surface is dark, oxidized regolith baked by stellar radiation. Less immediately lethal than the Irradiated Wastes but still dangerous. Iron deposits are accessible but extraction exposes agents to radiation. Ancient impact craters provide occasional natural shelter.",
+      "temp_range_c": [10, 60],
+      "zone": "day_side",
+      "traversable": true,
+      "survival_time_ticks_unprotected": 12,
+      "resources": {
+        "iron_ore": "moderate",
+        "silica_sand": "moderate",
+        "regolith": "abundant",
+        "basalt": "moderate"
+      },
+      "hazard_modifiers": {
+        "flare_damage_multiplier": 2.0,
+        "radiation_zone": "direct_stellar_exposure"
+      }
+    },
+    {
+      "id": "radiation_shadow_zone",
+      "name": "Radiation Shadow Zone",
+      "description": "The narrow terminator band partially shielded from direct stellar radiation by the planet's own curvature. This is the only marginally survivable zone — but 'survivable' is relative. Background radiation is still elevated. Resources are scarce because geological processes that concentrate minerals (volcanism, hydrothermal activity) are minimal here. Agents must build their base here but conduct resource expeditions into dangerous zones.",
+      "temp_range_c": [-20, 5],
+      "zone": "terminator",
+      "traversable": true,
+      "survival_time_ticks_unprotected": null,
+      "resources": {
+        "regolith": "moderate",
+        "olivine": "sparse",
+        "calcite": "sparse",
+        "silica_sand": "sparse"
+      },
+      "hazard_modifiers": {
+        "flare_damage_multiplier": 0.6,
+        "seismic_injury_probability_per_eva_hour": 0.002
+      }
+    },
+    {
+      "id": "permafrost_expanse",
+      "name": "Permafrost Expanse",
+      "description": "Beyond the terminator, the temperature drops into permanent sub-zero conditions. The surface is a mix of frozen regolith and water ice deposits. Lower radiation than the day side (planetary shadow), making it safer for extended operations, but the extreme cold is dangerous. Possible subsurface pockets of liquid water maintained by residual tidal heating.",
+      "temp_range_c": [-60, -20],
+      "zone": "night_side_near",
+      "traversable": true,
+      "survival_time_ticks_unprotected": 16,
+      "resources": {
+        "water_ice": "abundant",
+        "graphite": "sparse",
+        "regolith": "moderate"
+      },
+      "hazard_modifiers": {
+        "crevasse_injury_probability_per_eva_hour": 0.004,
+        "visibility_range_modifier": 0.4,
+        "movement_speed_modifier": 0.65
+      }
+    },
+    {
+      "id": "frozen_abyss",
+      "name": "Frozen Abyss",
+      "description": "The anti-stellar pole — perpetual darkness at temperatures approaching -200°C in the deepest regions. Thick ice deposits, possibly including nitrogen and ammonia ices alongside water ice. Zero stellar radiation but the cold itself is lethal. Possible cryovolcanic features — eruptions of water/ammonia slush from subsurface reservoirs. The only place on the planet with substantial carbon compounds (trapped in ices).",
+      "temp_range_c": [-200, -60],
+      "zone": "anti_stellar",
+      "traversable": true,
+      "survival_time_ticks_unprotected": 3,
+      "resources": {
+        "water_ice": "very_abundant",
+        "graphite": "moderate"
+      },
+      "hazard_modifiers": {
+        "visibility_range_modifier": 0.15,
+        "movement_speed_modifier": 0.4,
+        "crevasse_injury_probability_per_eva_hour": 0.015,
+        "cryovolcanic_injury_probability_per_eva_hour": 0.002
+      }
+    }
+  ],
+  "resource_modifiers": {
+    "scarcity_factor": 0.25,
+    "water_ice": "night_side_only",
+    "iron_ore": "day_side_concentrated",
+    "chalcopyrite_ore": "impact_exposed_day_side",
+    "notes": "Most resource-hostile planet. The radiation-shadow zone has little exposed feedstock. Some pre-existing ore bodies are impact-exposed on the high-dose day side; water and carbonaceous material remain confined to cold traps. Radiation changes access risk, not elemental abundance."
+  },
+  "difficulty_rating": 5,
+  "difficulty_label": "Extreme",
+  "scientific_references": [
+    "Anglada-Escudé et al. 2016 — Proxima Centauri b discovery (Nature 536, 437–440)",
+    "Ribas et al. 2016 — Proxima Centauri habitat zone assessment",
+    "Howard et al. 2018 — Proxima Centauri superflare observations",
+    "Meadows et al. 2018 — Habitability of Proxima Centauri b (Astrobiology 18:2)",
+    "Garraffo et al. 2016 — Stellar wind pressure on Proxima Centauri b (~2000x solar)",
+    "Dong et al. 2017 — Atmospheric loss models for Proxima Centauri b"
+  ]
+}

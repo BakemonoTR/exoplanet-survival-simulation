@@ -1,0 +1,194 @@
+{
+  "id": "kepler-442b",
+  "display_name": "Kepler-442b",
+  "epistemic_model": {
+    "classification": "scenario-constrained synthetic surface realization",
+    "observed_parameters": ["transit orbital period", "transit radius ratio"],
+    "inferred_parameters": ["planet radius", "equilibrium temperature", "probabilistic mass and gravity"],
+    "scenario_assumptions": ["rotation period", "surface pressure and composition", "surface temperature cycle", "tectonics", "volcanism", "biomes and mineral deposits", "surface radiation dose"],
+    "uncertainty_policy": "Unobserved surface properties are deterministic scenario priors for reproducible RL experiments, not measured facts. Results apply to this realization, not uniquely to the real Kepler-442b."
+  },
+  "star": {
+    "name": "Kepler-442",
+    "type": "K5V orange dwarf",
+    "mass_solar": 0.61,
+    "luminosity_solar": 0.12,
+    "distance_ly": 1206,
+    "age_gyr": 2.9
+  },
+  "orbital": {
+    "semi_major_axis_au": 0.409,
+    "orbital_period_days": 112.3,
+    "eccentricity": 0.04
+  },
+  "physical": {
+    "mass_earth": 2.36,
+    "radius_earth": 1.34,
+    "gravity_g": 1.31,
+    "density_gcc": 5.3,
+    "escape_velocity_kms": 13.5
+  },
+  "surface": {
+    "tidally_locked": false,
+    "day_length_hours": 28.0,
+    "temp_day_c": 15,
+    "temp_night_c": -20,
+    "equilibrium_temp_k": 266,
+    "solar_flux_relative_to_earth": 0.70
+  },
+  "atmosphere": {
+    "present": true,
+    "composition": {"N2": 0.65, "CO2": 0.28, "Ar": 0.04, "O2": 0.02, "H2O": 0.01},
+    "composition_notes": "N2-CO2 dominated. Higher gravity retains heavier molecules. Trace O2 from UV photolysis of H2O. Mean molecular weight ~0.034 kg/mol.",
+    "o2_fraction": 0.02,
+    "surface_pressure_atm": 1.6,
+    "notes": "Higher gravity (1.31g) aids atmospheric retention. K-type star is significantly calmer than M dwarfs. Denser atmosphere provides some radiation shielding but increases physical exertion."
+  },
+  "geology": {
+    "bulk_composition": "Iron core (~30% by mass), thick silicate mantle, higher density of heavy elements due to gravitational settling during formation",
+    "core_type": "Iron-nickel, likely fully differentiated",
+    "mantle_minerals": ["olivine", "pyroxene", "garnet", "perovskite", "magnesiowustite"],
+    "surface_minerals": ["basalt", "gabbro", "iron_oxide", "magnetite", "olivine", "heavy_mineral_sands"],
+    "tectonic_activity": "Active — young planet (2.9 Gyr), higher internal heat. Plate tectonics probable, with active mountain building and subduction zones.",
+    "volcanism": "Active — multiple volcanic regions with basaltic lava flows and pyroclastic deposits"
+  },
+  "hazards": ["high_gravity_fatigue", "volcanic_eruption", "dense_atmosphere_storms", "seismic_event"],
+  "flare_profile": {
+    "flare_events_per_80_days": 0.1,
+    "average_flare_energy_erg": 1e27,
+    "superflare_probability_per_year": 0.0001,
+    "uv_flux_relative_to_earth": 0.6,
+    "radiation_baseline_sv_per_hour": 0.0000003,
+    "radiation_flare_sv_per_hour": 0.000003,
+    "notes": "K-type stars are extremely stable. Negligible flare risk. The planet's challenges come from its physical properties (gravity, volcanism), not radiation."
+  },
+  "radiation_system": {
+    "enabled": true,
+    "model_status": "scenario_prior_not_surface_measurement",
+    "baseline_dose_sv_per_hour": 0.0000003,
+    "basis": "A dense 1.6 atm scenario atmosphere and quiet K dwarf are assumed to reduce the surface field to an Earth-background-order planning prior; magnetosphere and atmospheric column are unobserved."
+  },
+  "world_generation": {
+    "type": "procedural_noise",
+    "noise_octaves": 8,
+    "noise_persistence": 0.55,
+    "noise_lacunarity": 2.2,
+    "elevation_range": [0, 120],
+    "map_size": 2000
+  },
+  "biomes": [
+    {
+      "id": "iron_basins",
+      "name": "Iron Basins",
+      "description": "Low-lying topographic depressions where heavy mineral sediments have accumulated over geological time. High gravity has sorted minerals by density — the heaviest (iron, magnetite) settle into these natural catch basins. Dark, rust-colored terrain with exposed metallic deposits. Periodically flooded by mineral-rich runoff from higher elevations.",
+      "temp_range_c": [-5, 15],
+      "zone": "elevation_low",
+      "traversable": true,
+      "survival_time_ticks_unprotected": null,
+      "resources": {
+        "iron_ore": "very_rich",
+        "chalcopyrite_ore": "rich",
+        "basalt": "abundant",
+        "regolith": "moderate"
+      },
+      "hazard_modifiers": {
+        "flooding_injury_probability_per_eva_hour": 0.006,
+        "collapse_injury_probability_per_eva_hour": 0.003
+      }
+    },
+    {
+      "id": "heavy_plateaus",
+      "name": "Heavy Plateaus",
+      "description": "Elevated plains of dense olivine-rich rock compressed by the planet's 1.31g gravity. The high gravity makes these plateaus feel oppressive — every step requires more energy. Rock here is extremely dense and strong, ideal for heavy construction but exhausting to extract. Exposed to high-altitude winds.",
+      "temp_range_c": [-20, 10],
+      "zone": "elevation_high",
+      "traversable": true,
+      "survival_time_ticks_unprotected": null,
+      "resources": {
+        "basalt": "very_rich",
+        "olivine": "abundant",
+        "silica_sand": "rich",
+        "regolith": "moderate"
+      },
+      "hazard_modifiers": {
+        "rockslide_injury_probability_per_eva_hour": 0.004,
+        "wind_speed_modifier": 1.6
+      }
+    },
+    {
+      "id": "sediment_flats",
+      "name": "Sediment Flats",
+      "description": "Wide expanses of layered sedimentary deposits — compressed regolith, calcium-magnesium carbonates, and trace organics. The most navigable terrain on this high-gravity world. Relatively flat, allowing easier movement despite the crushing weight. Ancient lakebeds or ocean floors, now dry but mineral-rich.",
+      "temp_range_c": [-10, 15],
+      "zone": "elevation_mid",
+      "traversable": true,
+      "survival_time_ticks_unprotected": null,
+      "resources": {
+        "regolith": "abundant",
+        "calcite": "rich",
+        "silica_sand": "rich",
+        "graphite": "moderate"
+      },
+      "hazard_modifiers": {
+        "wind_speed_modifier": 1.15
+      }
+    },
+    {
+      "id": "geothermal_seeps",
+      "name": "Geothermal Seeps",
+      "description": "Active geothermal zones where subsurface heat reaches the surface through fracture networks. Warm, humid micro-environments with liquid water seeping through sulfurous rock. Rich in dissolved minerals and carbon compounds deposited by hydrothermal activity. The planet's youth (2.9 Gyr) means substantial internal heat remains.",
+      "temp_range_c": [15, 45],
+      "zone": "localized_geothermal",
+      "traversable": true,
+      "survival_time_ticks_unprotected": null,
+      "resources": {
+        "sulfur": "very_rich",
+        "graphite": "rich",
+        "chalcopyrite_ore": "moderate"
+      },
+      "hazard_modifiers": {
+        "toxic_exposure_probability_per_eva_hour": 0.012,
+        "ground_instability_injury_probability_per_eva_hour": 0.008,
+        "scalding_injury_probability_per_eva_hour": 0.005
+      }
+    },
+    {
+      "id": "highland_ridges",
+      "name": "Highland Ridges",
+      "description": "High-altitude rocky ridges and wind-swept silicate plateaus. Exposed to high-altitude winds with rich crystalline mineral deposits.",
+      "temp_range_c": [-15, 5],
+      "zone": "polar_high_altitude",
+      "traversable": true,
+      "survival_time_ticks_unprotected": null,
+      "resources": {
+        "silica_sand": "rich",
+        "basalt": "abundant",
+        "calcite": "moderate"
+      },
+      "hazard_modifiers": {
+        "rockslide_injury_probability_per_eva_hour": 0.003
+      }
+    }
+  ],
+  "resource_modifiers": {
+    "scarcity_factor": 0.6,
+    "iron_ore": "basins_concentrated",
+    "chalcopyrite_ore": "basins_and_hydrothermal",
+    "notes": "Mineralization is assigned to differentiated crust and ancient hydrothermal systems, not to gravity concentrating metals at the surface. High gravity (1.31g) still makes excavation and transport harder. Water is extracted via atmospheric condensers and life-support recycling."
+  },
+  "gravity_effects": {
+    "energy_decay_multiplier": 1.3,
+    "movement_speed_multiplier": 0.85,
+    "carry_capacity_multiplier": 0.75,
+    "construction_speed_multiplier": 0.8,
+    "notes": "1.31g gravity applies a persistent penalty to all physical actions. Agents with high endurance genome are significantly advantaged here."
+  },
+  "difficulty_rating": 2,
+  "difficulty_label": "Medium",
+  "scientific_references": [
+    "Torres et al. 2015 — Kepler-442b validation and characterization (ApJ 800, 99)",
+    "Dressing & Charbonneau 2015 — Occurrence rates and properties of super-Earths",
+    "Kopparapu et al. 2014 — Habitable zone boundaries for K and M stars",
+    "Selsis et al. 2007 — Habitability of planets around K dwarfs"
+  ]
+}
