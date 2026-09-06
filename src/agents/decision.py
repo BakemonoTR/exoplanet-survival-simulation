@@ -1450,6 +1450,23 @@ class DecisionEngine:
             and crew.needs.energy >= 25.0
             and crew.needs.o2_supply >= 15.0
         ]
+        experiment_context = {}
+        if getattr(getattr(self, "strategic_policy", None), "deadline_learning", False):
+            # Coarse observations limit table growth. These describe the live
+            # constraint; they do not select a preferred structure or bypass BOMs.
+            constraint = ("assembly" if active_site or ready_recipe_names else
+                          "fabrication" if any(
+                              cycle.get("completion_pending")
+                              for cycle in getattr(self, "manufacturing_cycles", {}).values()
+                          ) else
+                          "supply" if eligible_recipe_names else "qualification")
+            experiment_context = {
+                "days_until_deadline": (
+                    getattr(self, "infrastructure_deadline_tick", 47520)
+                    - getattr(self, "current_tick", 0)
+                ) * self.tick_minutes / 1440.0,
+                "work_constraint": constraint,
+            }
         return build_colony_strategy_state(
             category_scores=self.colony.get_scores(),
             colony_resources=dict(getattr(self, "_colony_resources", {})),
@@ -1462,6 +1479,7 @@ class DecisionEngine:
             ),
             eligible_recipes=eligible_recipe_names,
             ready_recipes=ready_recipe_names,
+            **experiment_context,
         )
 
     def _capacity_site_layout_key(self) -> tuple:

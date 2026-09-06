@@ -33,7 +33,6 @@ from src.agents.prompts import build_system_prompt
 from src.agents.decision import DecisionEngine
 from src.agents.strategic_rl import (
     ColonyStrategicPolicy,
-    STRATEGY_POLICY_ID,
 )
 from src.orchestration.llm_client import LocalNarrativeClient, LLMCallType
 from src.orchestration.fallback import FallbackDecisionEngine
@@ -179,7 +178,8 @@ class SimulationEngine:
                  tick_speed: float = None,
                  on_tick: Callable = None,
                  on_event: Callable = None,
-                 db = None):
+                 db = None,
+                 strategic_deadline_learning: bool = False):
         """
         Initialize simulation.
         
@@ -192,6 +192,7 @@ class SimulationEngine:
             on_tick: Callback(tick, state_dict) called each tick
             on_event: Callback(event_dict) called on notable events
             db: Database persistence instance
+            strategic_deadline_learning: Opt-in strategy experiment with isolated persistence
         """
         # Load planet
         self.seed = int(seed)
@@ -342,8 +343,10 @@ class SimulationEngine:
             )
         )
         self.strategic_policy = ColonyStrategicPolicy(
-            self.planet.id, seed=self.seed
+            self.planet.id, seed=self.seed,
+            deadline_learning=strategic_deadline_learning,
         )
+        self._strategy_deadline_readiness = 0.0
         self.decision_engine.strategic_policy = self.strategic_policy
         self._strategic_policy_loaded = False
         self._terminal_reward_applied = False
@@ -6173,6 +6176,13 @@ class SimulationEngine:
     def _update_support_soak(self) -> None:
         """Advance one qualification tick only while every other gate holds."""
         state = self._mission_state()
+        if self.strategic_policy.deadline_learning and (
+            self.current_tick <= state["support_soak"]["infrastructure_deadline_tick"]
+        ):
+            self._strategy_deadline_readiness = max(
+                self._strategy_deadline_readiness,
+                min(self.colony_score.get_scores().values(), default=0.0),
+            )
         non_soak_gates = {
             name: passed for name, passed in state["arrival_gates"].items()
             if name != "thirty_day_support_model"
@@ -8221,7 +8231,7 @@ class SimulationEngine:
         if getattr(self, "_db", None) and not self._strategic_policy_loaded:
             try:
                 saved_strategy = self._db.load_agent_q_table(
-                    STRATEGY_POLICY_ID, planet_id=self.planet.id
+                    self.strategic_policy.persistence_id, planet_id=self.planet.id
                 )
                 if saved_strategy and isinstance(saved_strategy, dict):
                     self.strategic_policy.load(saved_strategy)
@@ -8630,7 +8640,7 @@ class SimulationEngine:
             ]
             if self._strategic_policy_loaded:
                 policies.append({
-                    "agent_id": STRATEGY_POLICY_ID,
+                    "agent_id": self.strategic_policy.persistence_id,
                     "q_table": self.strategic_policy.dump(),
                     "total_reward": self.strategic_policy.total_reward,
                 })
@@ -16531,6 +16541,15 @@ class SimulationEngine:
                     * self.mission_profile.clock.tick_minutes
                     / 1440.0
                 ),
+                category_scores=self.colony_score.get_scores(),
+                deadline_readiness=self._strategy_deadline_readiness,
+                support_soak_fraction=(self._support_soak_ticks / max(
+                    1, self._mission_state()["support_soak"]["required_ticks"]
+                )),
+                surviving_crew_fraction=(sum(
+                    getattr(crew.status, "value", str(crew.status)) != "dead"
+                    for crew in self.agents
+                ) / max(1, len(self.agents))),
             )
 
             individual_reward = {
@@ -16564,7 +16583,7 @@ class SimulationEngine:
             ]
             if self._strategic_policy_loaded:
                 policies.append({
-                    "agent_id": STRATEGY_POLICY_ID,
+                    "agent_id": self.strategic_policy.persistence_id,
                     "q_table": self.strategic_policy.dump(),
                     "total_reward": self.strategic_policy.total_reward,
                 })

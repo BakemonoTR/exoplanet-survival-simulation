@@ -22,6 +22,8 @@ META_KEY = "__strategy_meta__"
 # and no already-ahead category may crowd every zero/low readiness category.
 # RL still chooses among all physically valid objectives inside that envelope.
 STATE_SCHEMA_VERSION = 8
+# Separate opt-in experiment; existing saved policies keep their schema/key.
+DEADLINE_STATE_SCHEMA_VERSION = 10
 
 
 def _band(value: float) -> str:
@@ -48,6 +50,8 @@ def build_colony_strategy_state(
     surface_requires_plss: bool,
     eligible_recipes: Optional[Iterable[str]] = None,
     ready_recipes: Optional[Iterable[str]] = None,
+    days_until_deadline: Optional[float] = None,
+    work_constraint: str = "unknown",
 ) -> str:
     """Return a compact, auditable state made only from observable facts."""
     ordered_categories = (
@@ -106,11 +110,17 @@ def build_colony_strategy_state(
     )
     eligible = ",".join(sorted(str(name) for name in (eligible_recipes or ())))
     ready_names = ",".join(sorted(str(name) for name in (ready_recipes or ())))
-    return (
+    state = (
         f"cap[{capacity}]|reserve[w:{water},o:{oxygen},f:{food},e:{energy}]"
         f"|crew:{crew_band}|site:{site}|ready:{ready}[{ready_names}]"
         f"|eligible[{eligible}]|plss:{int(bool(surface_requires_plss))}"
     )
+    if days_until_deadline is not None:
+        days = float(days_until_deadline)
+        phase = ("missed" if days < 0 else "final" if days <= 30 else
+                 "urgent" if days <= 60 else "build" if days <= 120 else "early")
+        state += f"|deadline:{phase}|constraint:{work_constraint}"
+    return state
 
 
 @dataclass
@@ -147,8 +157,18 @@ class ColonyStrategicPolicy:
         epsilon_decay_per_attempt: float = 0.90,
         default_stall_timeout_ticks: int = 432,
         default_replan_interval_ticks: int = 1008,
+        deadline_learning: bool = False,
+        evaluation_mode: bool = False,
     ):
         self.planet_id = str(planet_id)
+        self.deadline_learning = bool(deadline_learning)
+        self.evaluation_mode = bool(evaluation_mode)
+        self.state_schema_version = (
+            DEADLINE_STATE_SCHEMA_VERSION if self.deadline_learning else STATE_SCHEMA_VERSION
+        )
+        self.persistence_id = STRATEGY_POLICY_ID + (
+            "__deadline_v2" if self.deadline_learning else ""
+        )
         self.seed = int(seed)
         self.learning_rate = float(learning_rate)
         self.discount_factor = float(discount_factor)
@@ -177,6 +197,8 @@ class ColonyStrategicPolicy:
 
     @property
     def epsilon(self) -> float:
+        if self.evaluation_mode:
+            return 0.0
         return max(
             self.minimum_epsilon,
             self.initial_epsilon
@@ -194,6 +216,38 @@ class ColonyStrategicPolicy:
     @staticmethod
     def action_key(recipe: str) -> str:
         return f"capacity:{recipe}"
+
+    def _learning_state_key(self, observation: str) -> str:
+        """Generalize only the opt-in table while retaining the audited state.
+
+        Exact ready/eligible recipe lists and the current site made nearly every
+        episode visit a new table row. Physical action masks already enforce
+        those facts, so the learner needs the reusable mission context instead.
+        """
+        if not self.deadline_learning:
+            return str(observation)
+
+        value = str(observation)
+
+        def bracket(name: str) -> str:
+            marker = f"{name}["
+            start = value.find(marker)
+            end = value.find("]", start)
+            return value[start:end + 1] if start >= 0 and end >= 0 else f"{name}[]"
+
+        def field(name: str, fallback: str) -> str:
+            marker = f"|{name}:"
+            start = value.find(marker)
+            if start < 0:
+                return f"{name}:{fallback}"
+            end = value.find("|", start + 1)
+            return value[start + 1:end if end >= 0 else None]
+
+        return "|".join((
+            bracket("cap"), bracket("reserve"), field("crew", "unknown"),
+            field("deadline", "unknown"), field("constraint", "unknown"),
+            field("plss", "0"),
+        ))
 
     @staticmethod
     def _reserve_context(state_key: str) -> str:
@@ -648,7 +702,9 @@ class ColonyStrategicPolicy:
             if built < current.target_count:
                 self.commitment = None
 
-        actions = self.q_table.setdefault(state_key, {})
+        learning_state_key = self._learning_state_key(state_key)
+        actions = (dict(self.q_table.get(learning_state_key, {})) if self.evaluation_mode
+                   else self.q_table.setdefault(learning_state_key, {}))
         for recipe in by_recipe:
             actions.setdefault(self.action_key(recipe), 0.0)
 
@@ -685,7 +741,7 @@ class ColonyStrategicPolicy:
             else min(1.0, 1.0 / required_count)
         )
         self.commitment = StrategyCommitment(
-            state_key=state_key,
+            state_key=learning_state_key,
             action_key=action,
             recipe=recipe,
             target_count=target_count,
@@ -713,7 +769,7 @@ class ColonyStrategicPolicy:
                 "replan_interval_ticks", self.default_replan_interval_ticks
             ))),
         )
-        transition = (state_key, action)
+        transition = (learning_state_key, action)
         if not self.episode_trace or self.episode_trace[-1] != transition:
             self.episode_trace.append(transition)
             if len(self.episode_trace) > 256:
@@ -743,7 +799,8 @@ class ColonyStrategicPolicy:
     ) -> None:
         """Learn from an observable dead end and reopen the action mask."""
         self._td_update(
-            current.state_key, current.action_key, reward, state_key
+            current.state_key, current.action_key, reward,
+            self._learning_state_key(state_key),
         )
         self.total_reward += float(reward)
         self.last_outcome = {
@@ -800,7 +857,10 @@ class ColonyStrategicPolicy:
             # not be an infinite positive-reward loop. Episode success still
             # credits necessary recovery through terminal return.
             reward = -min(2.0, elapsed_days * 0.20)
-        self._td_update(current.state_key, current.action_key, reward, next_state_key)
+        self._td_update(
+            current.state_key, current.action_key, reward,
+            self._learning_state_key(next_state_key),
+        )
         self.total_reward += reward
         self.last_outcome = {
             "type": "objective_completed",
@@ -817,6 +877,8 @@ class ColonyStrategicPolicy:
     def _td_update(
         self, state_key: str, action_key: str, reward: float, next_state_key: str
     ) -> None:
+        if self.evaluation_mode:
+            return
         actions = self.q_table.setdefault(state_key, {})
         old = float(actions.get(action_key, 0.0))
         next_actions = self.q_table.get(next_state_key, {})
@@ -826,14 +888,20 @@ class ColonyStrategicPolicy:
             old + self.learning_rate * (target - old), 4
         )
 
-    def finish_episode(self, outcome: str, *, elapsed_days: float = 0.0) -> int:
+    def finish_episode(
+        self, outcome: str, *, elapsed_days: float = 0.0,
+        category_scores: Optional[dict[str, float]] = None,
+        deadline_readiness: float = 0.0,
+        support_soak_fraction: float = 0.0,
+        surviving_crew_fraction: float = 1.0,
+    ) -> int:
         """Back-propagate success/failure through high-level decisions."""
-        if str(outcome) == "manual_stop":
+        if str(outcome) == "manual_stop" or self.evaluation_mode:
             # Developer/UI inspection stops are not experimental outcomes and
             # must not contaminate the learned planet policy.
             self.last_outcome = {
-                "type": "episode_aborted",
-                "outcome": "manual_stop",
+                "type": "episode_evaluated" if self.evaluation_mode else "episode_aborted",
+                "outcome": str(outcome),
                 "reward": 0.0,
                 "updated_transitions": 0,
             }
@@ -854,6 +922,20 @@ class ColonyStrategicPolicy:
             reward = min(-40.0, -100.0 + max(0.0, float(elapsed_days)) * 1.5)
         else:
             reward = float(terminal_rewards.get(str(outcome), -20.0))
+        if self.deadline_learning and str(outcome) in {"timeout", "stagnation"}:
+            def unit(value: float) -> float:
+                return max(0.0, min(1.0, float(value)))
+
+            # Missing categories are zero; surplus cannot hide the weakest
+            # life-support category. A failed mission never receives the +100
+            # acceptance reward, even if its rounded display score is 100.
+            categories = [unit((category_scores or {}).get(name, 0.0)) for name in
+                          ("energy", "o2", "water", "food", "shelter", "hazard_protection")]
+            progress = (30.0 * sum(categories) / len(categories)
+                        + 20.0 * min(categories)
+                        + 5.0 * unit(deadline_readiness)
+                        + 5.0 * unit(support_soak_fraction))
+            reward = -60.0 + unit(surviving_crew_fraction) * progress
         credit = reward
         updated = 0
         seen: set[tuple[str, str]] = set()
@@ -899,7 +981,7 @@ class ColonyStrategicPolicy:
             if state != META_KEY
         }
         payload[META_KEY] = {
-            "state_schema_version": STATE_SCHEMA_VERSION,
+            "state_schema_version": self.state_schema_version,
             "attempt_count": int(self.attempt_count),
             "exploration_age": int(self.exploration_age),
             "total_reward": round(float(self.total_reward), 6),
@@ -909,7 +991,7 @@ class ColonyStrategicPolicy:
 
     def load(self, payload: dict) -> None:
         metadata = dict(payload.get(META_KEY, {}) or {})
-        if int(metadata.get("state_schema_version", 0)) != STATE_SCHEMA_VERSION:
+        if int(metadata.get("state_schema_version", 0)) != self.state_schema_version:
             # Observation keys are part of the experiment definition.  A
             # policy trained against an older state encoding cannot be mixed
             # with the new one: its Q rows are unreachable while a restored
@@ -922,7 +1004,7 @@ class ColonyStrategicPolicy:
             self.last_outcome = {
                 "type": "incompatible_state_schema_reset",
                 "loaded_version": metadata.get("state_schema_version"),
-                "required_version": STATE_SCHEMA_VERSION,
+                "required_version": self.state_schema_version,
             }
             return
         self.q_table = {
@@ -944,7 +1026,9 @@ class ColonyStrategicPolicy:
         current = self.commitment
         return {
             "planet_id": self.planet_id,
-            "state_schema_version": STATE_SCHEMA_VERSION,
+            "state_schema_version": self.state_schema_version,
+            "deadline_learning": self.deadline_learning,
+            "evaluation_mode": self.evaluation_mode,
             "attempt_count": self.attempt_count,
             "exploration_age": self.exploration_age,
             "epsilon": round(self.epsilon, 4),
