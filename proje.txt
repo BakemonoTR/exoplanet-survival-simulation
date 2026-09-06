@@ -208,12 +208,12 @@ Saf event-driven yapı yerine **iki katmanlı karar döngüsü** kullanılır:
 
 ### 7.1 Model seçimi
 **Tek model seviyesi, tüm ajanlarda eşit zeka.** Ajanlar arası fark MODELDEN değil, system prompt'taki genom/yetkinlik/rol bilgisinden gelir.
-- **Birincil ve tek zorunlu sağlayıcı: Groq (Llama 3.3 70B)** — hızlı, tamamen ücretsiz, kart istemiyor. Plan bu tek sağlayıcı üzerine kurulu, ekstra bağımlılık yok.
+- **Anlatı katmanı: yerel fine-tuned GPT-2** — yalnızca diyalog ve düşünce metni üretir; simülasyon kararlarını değiştirmez.
 - **Gemini 2.5 Flash — OPSİYONEL, zorunlu değil:** Google AI Studio bazı kullanıcılarda/bölgelerde ücretsiz tarifede bile kart bağlama isteyebiliyor (rapor edilmiş gerçek deneyim). Bu yüzden plana zorunlu bağımlılık olarak eklenmiyor. Takımdan biri kart bağlamayı kabul ederse ek/yedek kapasite olarak kullanılabilir, ama mimari Gemini olmadan da tam çalışır.
 - 8B gibi küçük modeller kullanılmaz — tutarlı multidisipliner akıl yürütme için yetersiz kalır.
 
 ### 7.2 API key havuzu
-- Her takım üyesi kendi ücretsiz Groq hesabını açar (kart gerekmez; rate limit organizasyon seviyesinde uygulanır, yani her hesap ayrı bir havuzdur).
+- Harici model hesabı veya API anahtarı gerekmez; yerel model bağlantısı hazır olduğunda sağlayıcı adaptörüne takılır.
 - Round-robin dağıtım: her LLM çağrısı sırada bekleyen bir sonraki key'e gider.
 - API anahtarı sayısı ekip büyüklüğüne bağlanmaz; mevcut anahtar havuzu oran limitlerine göre round-robin kullanılır. Fizik ve RL, LLM servisi olmadan da deterministik olarak çalışır.
 
@@ -259,7 +259,7 @@ Her gezegen profili için ayrı simülasyon koşusu, ardından karşılaştırma
 
 ## 10. Teknoloji Yığını (sıfır bütçe, kart gerektirmez)
 
-- **LLM:** Groq (Llama 3.3 70B, doğrudan API) — tek zorunlu sağlayıcı, kart istemez. Gemini 2.5 Flash opsiyonel/yedek (bazı kullanıcılarda Google AI Studio ücretsiz tarifede bile kart isteyebiliyor — zorunlu değil, kart bağlayan biri olursa eklenir)
+- **Anlatı modeli:** yerel fine-tuned GPT-2 adaptörü — opsiyonel, ağ bağlantısı kullanmaz ve yalnızca diyalog/düşünce telemetrisi üretir.
 - **Vektör DB / RAG:** Chroma veya FAISS (lokal, ücretsiz)
 - **Durum/persistans:** SQLite (yerel dosya) — checkpoint ve log için yeterli; Supabase/Firebase yalnızca ileride "makine kapalıyken de erişim" istenirse eklenir, MVP için gerekli değil
 - **Compute:** Geliştiricilerin kendi laptopları (Colab gereksiz — model eğitimi yok, sürekli çalışan event-loop Colab'ın oturum zaman aşımına uygun değil)

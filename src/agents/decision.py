@@ -25,7 +25,7 @@ from src.agents.prompts import (
     build_system_prompt, build_strategic_prompt,
     build_tactical_prompt, build_social_prompt,
 )
-from src.orchestration.llm_client import GroqLLMClient, LLMCallType
+from src.orchestration.llm_client import LocalNarrativeClient, LLMCallType
 from src.orchestration.fallback import FallbackDecisionEngine, fallback_engine
 from src.memory.vector_store import MemoryManager
 from src.systems.colony_score import ColonyScore
@@ -185,7 +185,7 @@ class DecisionEngine:
         "radiator_panel",
     )
     
-    def __init__(self, llm_client: GroqLLMClient,
+    def __init__(self, llm_client: LocalNarrativeClient,
                  memory_manager: MemoryManager = None,
                  colony_score: ColonyScore = None,
                  dialogue_generation_enabled: bool = False):
@@ -7799,7 +7799,40 @@ class DecisionEngine:
         )
         return result
 
-    def apply_rl_reward(self, agent: Agent, reward: float, next_state_key: str):
+    def _record_rl_reward(
+        self,
+        agent: Agent,
+        reward: float,
+        reason: str,
+        *,
+        state_key: Optional[str] = None,
+        action_key: Optional[str] = None,
+        q_before: Optional[float] = None,
+        q_after: Optional[float] = None,
+        components: Optional[dict] = None,
+    ) -> None:
+        history = getattr(agent, "rl_reward_history", [])
+        history.append({
+            "tick": int(getattr(agent, "_telemetry_tick", agent.ticks_alive)),
+            "reward": round(float(reward), 4),
+            "reason": str(reason),
+            "state_key": state_key,
+            "action": action_key,
+            "q_before": q_before,
+            "q_after": q_after,
+            "components": dict(components or {}),
+            "source": "reinforcement_learning",
+        })
+        agent.rl_reward_history = history[-120:]
+
+    def apply_rl_reward(
+        self,
+        agent: Agent,
+        reward: float,
+        next_state_key: str,
+        reason: Optional[str] = None,
+        components: Optional[dict] = None,
+    ):
         """Apply Bellman Temporal Difference (TD) Q-table update."""
         s = agent.last_state_key
         a = agent.last_action_key
@@ -7825,6 +7858,12 @@ class DecisionEngine:
         td_target = reward + gamma * max_next_q
         new_q = old_q + alpha * (td_target - old_q)
         agent.q_table[s][a] = round(new_q, 3)
+        self._record_rl_reward(
+            agent, reward, reason or next_state_key,
+            state_key=s, action_key=a,
+            q_before=round(old_q, 3), q_after=agent.q_table[s][a],
+            components=components,
+        )
 
     def apply_delayed_rl_reward(
         self,
@@ -7843,6 +7882,11 @@ class DecisionEngine:
         # speculative bootstrap term at dispatch time.
         actions[action_key] = round(old_q + alpha * (reward - old_q), 3)
         agent.total_accumulated_reward += float(reward)
+        self._record_rl_reward(
+            agent, reward, "completed physical job",
+            state_key=state_key, action_key=action_key,
+            q_before=round(old_q, 3), q_after=actions[action_key],
+        )
         return True
 
     def apply_terminal_rl_reward(
@@ -7876,6 +7920,7 @@ class DecisionEngine:
 
         agent.rl_episode_trace.clear()
         agent._rl_transition_pending = False
+        self._record_rl_reward(agent, reward, "episode outcome")
         return updated
 
     # ================================================================

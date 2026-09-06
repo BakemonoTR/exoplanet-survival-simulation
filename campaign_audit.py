@@ -33,7 +33,6 @@ DELIVERED_BASELINE = {
     "cnc_fabricator",
 }
 
-os.environ.setdefault("GROQ_API_KEY", "offline-campaign-audit")
 if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 

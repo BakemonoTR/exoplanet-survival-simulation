@@ -4,8 +4,8 @@ uvicorn>=0.24.0
 websockets>=12.0
 pydantic>=2.0.0
 
-# LLM
-groq>=0.4.0
+# Optional local GPT-2 narration is connected through LocalNarrativeProvider.
+# The simulation itself has no hosted language-model dependency.
 
 # Embedding
 sentence-transformers>=2.2.0

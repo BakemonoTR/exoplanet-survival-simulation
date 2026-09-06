@@ -1462,14 +1462,17 @@
     <!-- Reversible visual experiment: remove these two includes to restore the legacy skin. -->
     <link rel="stylesheet" href="/static/theme-industrial.css?v=15">
     <script src="/static/tactical-industrial.js?v=15"></script>
+    <link rel="stylesheet" href="/static/site-shell.css?v=1">
+    <script defer src="/static/analysis-workspace.js?v=1"></script>
+    <script defer src="/static/public-experience.js?v=1"></script>
 </head>
 
-<body>
+<body class="public-shell">
 
     <!-- HEADER -->
     <header class="header">
         <div class="header-left">
-            <div class="logo">EXOPLANET COLONY SIMULATION</div>
+            <div class="logo"><span class="logo-mark">EXOPLANET COLONY SIMULATION</span><small>PUBLIC OBSERVATORY</small></div>
             <div id="statusBadge" class="status-badge status-idle">IDLE</div>
             <button id="debugModeBadge" class="debug-mode-badge hidden" type="button" onclick="toggleDebugPanel()"
                 aria-controls="debugLoopPanel" aria-expanded="true" title="Show or collapse debug loop details">
@@ -1485,17 +1488,15 @@
                 <button class="nav-tab active" id="tabBtnSim" onclick="switchTab('sim')">
                     <span>Simulation</span>
                 </button>
-                <button class="nav-tab" id="tabBtnNeural" onclick="switchTab('neural')">
-                    <span>LLM Decision Feed</span>
-                    <span class="tab-badge" id="neuralBadge">0</span>
-                </button>
                 <button class="nav-tab" id="tabBtnAnalytics" onclick="switchTab('analytics')">
-                    <span>Simulation Analytics</span>
+                    <span>Analytics &amp; Data</span>
+                    <span class="tab-badge" id="neuralBadge">0</span>
                 </button>
             </div>
         </div>
         <div class="header-controls">
-            <select id="speedSelect" class="speed-select" title="Simulation speed">
+            <div class="observer-status"><span class="observer-dot"></span><span>PUBLIC OBSERVATION</span></div>
+            <select id="speedSelect" class="speed-select" title="Simulation speed" hidden>
                 <option value="0.5">0.5x Yavaş (8.0s)</option>
                 <option value="1" selected>1.0x Normal (4.0s)</option>
                 <option value="2">2.0x Hızlı (2.0s)</option>
@@ -1504,9 +1505,9 @@
                 <option value="25">25x Diagnostic (0.16s)</option>
                 <option value="50">50x Audit (0.08s)</option>
             </select>
-            <button id="btnPause" class="btn" disabled>⏸ Pause</button>
-            <button id="btnStop" class="btn btn-danger" disabled>⏹ Stop</button>
-            <button id="btnStart" class="btn btn-primary" onclick="showModal()">🚀 New Simulation</button>
+            <button id="btnPause" class="btn" disabled hidden>⏸ Pause</button>
+            <button id="btnStop" class="btn btn-danger" disabled hidden>⏹ Stop</button>
+            <button id="btnStart" class="btn btn-primary" onclick="showModal()" hidden>🚀 New Simulation</button>
         </div>
     </header>
 
@@ -1637,45 +1638,44 @@
                     </div>
                 </div>
 
-                <!-- AI-STATUS PANEL -->
+                <!-- LOCAL NARRATIVE STATUS -->
                 <div class="panel">
                     <div class="panel-header">
-                        <span>AI-STATUS</span>
+                        <span>NARRATIVE LAYER</span>
                         <span id="llmEngineBadge"
-                            style="font-size:9.5px;font-family:'JetBrains Mono',monospace;color:#34d399;background:rgba(16,185,129,0.12);padding:2px 8px;border-radius:10px;border:1px solid rgba(16,185,129,0.3);">ONLINE</span>
+                            style="font-size:9.5px;font-family:'JetBrains Mono',monospace;color:#94a3b8;background:rgba(148,163,184,0.08);padding:2px 8px;border-radius:10px;border:1px solid rgba(148,163,184,0.2);">STANDBY</span>
                     </div>
                     <div class="panel-body" id="llmPanel" style="font-size:12px;color:var(--text-secondary)">
                         <div
                             style="font-size:11px;color:#a5b4fc;font-weight:600;margin-bottom:8px;font-family:'JetBrains Mono',monospace;">
-                            <span id="llmModelName">Llama-3.3-70B-Versatile (Groq Pool)</span>
+                            <span id="llmModelName">Local GPT-2 adapter</span>
                         </div>
                         <div
                             style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-family:'JetBrains Mono',monospace;font-size:11px;">
                             <div
                                 style="background:rgba(0,0,0,0.25);padding:6px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.04);">
-                                <div style="color:var(--text-muted);font-size:9px;text-transform:uppercase;">API Calls
+                                <div style="color:var(--text-muted);font-size:9px;text-transform:uppercase;">Generations
                                 </div>
                                 <div style="font-size:13px;font-weight:700;color:#f1f5f9;margin-top:2px;" id="llmCalls">
                                     0</div>
                             </div>
                             <div
                                 style="background:rgba(0,0,0,0.25);padding:6px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.04);">
-                                <div style="color:var(--text-muted);font-size:9px;text-transform:uppercase;">Tokens Used
+                                <div style="color:var(--text-muted);font-size:9px;text-transform:uppercase;">Local Tokens
                                 </div>
                                 <div style="font-size:13px;font-weight:700;color:#38bdf8;margin-top:2px;"
                                     id="llmTokens">0</div>
                             </div>
                             <div
                                 style="background:rgba(0,0,0,0.25);padding:6px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.04);">
-                                <div style="color:var(--text-muted);font-size:9px;text-transform:uppercase;">Cache Rate
+                                <div style="color:var(--text-muted);font-size:9px;text-transform:uppercase;">Cache
                                 </div>
                                 <div style="font-size:13px;font-weight:700;color:#34d399;margin-top:2px;" id="llmCache">
                                     0%</div>
                             </div>
                             <div
                                 style="background:rgba(0,0,0,0.25);padding:6px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.04);">
-                                <div style="color:var(--text-muted);font-size:9px;text-transform:uppercase;">Fallback
-                                    Calls</div>
+                                <div style="color:var(--text-muted);font-size:9px;text-transform:uppercase;">Pending</div>
                                 <div style="font-size:13px;font-weight:700;color:#fbbf24;margin-top:2px;"
                                     id="llmFallback">0</div>
                             </div>
@@ -1691,7 +1691,7 @@
                             </div>
                             <div id="llmLastThoughtPreview"
                                 style="font-size:11px;color:#cbd5e1;font-style:italic;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                                Awaiting agent decisions...
+                                Narrative model not connected. Simulation decisions remain active.
                             </div>
                         </div>
                     </div>
@@ -1701,40 +1701,41 @@
     </div>
 
     <!-- ============================================================ -->
-    <!-- TAB 2: LLM DECISION FEED & DIALOGUES VIEW -->
+    <!-- TAB 2A: AGENT, EVENT & DIALOGUE DATA -->
     <!-- ============================================================ -->
     <div id="viewNeural" class="tab-view">
         <div class="neural-container">
 
+            <div id="agentInspectorMount"></div>
+
             <!-- TOP METRICS BANNER -->
             <div class="neural-header-stats">
                 <div class="neural-stat-card">
-                    <div class="neural-stat-lbl">Active Model</div>
-                    <div class="neural-stat-val" id="neuralModelVal" style="font-size:18px;color:#a5b4fc;">Llama-3.3-70B
+                    <div class="neural-stat-lbl">Narrative Model</div>
+                    <div class="neural-stat-val" id="neuralModelVal" style="font-size:18px;color:#a5b4fc;">Local GPT-2
                     </div>
-                    <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Groq Cloud Inference Engine
+                    <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Prepared for your fine-tuned local model
                     </div>
                 </div>
                 <div class="neural-stat-card">
-                    <div class="neural-stat-lbl">Total Tokens</div>
+                    <div class="neural-stat-lbl">Local Tokens</div>
                     <div class="neural-stat-val" id="neuralTotalTokens" style="color:#38bdf8;">0</div>
                     <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Prompt + Completion</div>
                 </div>
                 <div class="neural-stat-card">
-                    <div class="neural-stat-lbl">Logged Decisions</div>
+                    <div class="neural-stat-lbl">Narrative Records</div>
                     <div class="neural-stat-val" id="neuralRecordCount" style="color:#34d399;">0</div>
-                    <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Strategic, Tactical, Social &
-                        Memory</div>
+                    <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Dialogue, thought &amp; memory</div>
                 </div>
                 <div class="neural-stat-card">
-                    <div class="neural-stat-lbl">Neural Execution Rate</div>
-                    <div class="neural-stat-val" id="neuralDecisionRate" style="color:#fbbf24;">100%</div>
-                    <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">0 Fallback Overrides</div>
+                    <div class="neural-stat-lbl">Simulation Policy</div>
+                    <div class="neural-stat-val" id="neuralDecisionRate" style="color:#fbbf24;">RL ACTIVE</div>
+                    <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Authoritative action policy</div>
                 </div>
                 <div class="neural-stat-card">
-                    <div class="neural-stat-lbl">API Key Pool</div>
-                    <div class="neural-stat-val" id="neuralKeyPoolStatus" style="color:#c084fc;">5 Active Keys</div>
-                    <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Round-robin load balancing</div>
+                    <div class="neural-stat-lbl">Narrative Status</div>
+                    <div class="neural-stat-val" id="neuralKeyPoolStatus" style="color:#c084fc;">Not connected</div>
+                    <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">No hosted language API</div>
                 </div>
             </div>
 
@@ -1751,8 +1752,6 @@
                     <span
                         style="font-size:11px;color:var(--text-muted);text-transform:uppercase;font-weight:700;letter-spacing:0.5px;">Type:</span>
                     <button class="filter-btn active" onclick="setNeuralTypeFilter('all', this)">All</button>
-                    <button class="filter-btn" onclick="setNeuralTypeFilter('strategic', this)">Strategic</button>
-                    <button class="filter-btn" onclick="setNeuralTypeFilter('tactical', this)">Tactical</button>
                     <button class="filter-btn" onclick="setNeuralTypeFilter('dialogue', this)">Dialogue</button>
                     <button class="filter-btn" onclick="setNeuralTypeFilter('reflection', this)">Reflection</button>
                 </div>
@@ -1773,10 +1772,10 @@
                 <div id="neuralFeedEmpty"
                     style="text-align:center;padding:60px 20px;color:var(--text-muted);background:rgba(15,23,42,0.4);border:1px dashed var(--border);border-radius:12px;">
                     <div style="font-size:16px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;">Awaiting
-                        LLM Inference Stream</div>
+                        Agent narrative stream is waiting</div>
                     <div style="font-size:12.5px;max-width:500px;margin:0 auto;line-height:1.5;">
-                        When simulation runs, agent strategic planning, emergency tactical decisions, inter-agent
-                        communications, and memory reflections will stream here in real time.
+                        Actions and reinforcement-learning decisions are live. Conversations, thoughts and reflections
+                        will appear here after the local GPT-2 narrative provider is connected.
                     </div>
                 </div>
             </div>
@@ -1943,6 +1942,21 @@
         </div>
     </div>
 
+    <!-- Public planet dispatch transition. The server decides the selected planet. -->
+    <section class="planet-dispatch" id="planetDispatch" aria-live="polite" aria-hidden="true">
+        <div class="planet-dispatch__ambient" aria-hidden="true"></div>
+        <div class="planet-dispatch__panel">
+            <div class="planet-dispatch__eyebrow"><span></span> NEXT COLONY TARGET</div>
+            <div class="planet-dispatch__viewport">
+                <div class="planet-dispatch__name" id="planetDispatchName">Awaiting mission control</div>
+                <div class="planet-dispatch__status" id="planetDispatchStatus">NOT COMPLETED</div>
+            </div>
+            <div class="planet-dispatch__rule"><i></i></div>
+            <div class="planet-dispatch__progress" id="planetDispatchProgress"></div>
+            <div class="planet-dispatch__roster" id="planetDispatchRoster"></div>
+        </div>
+    </section>
+
     <!-- START MODAL -->
     <div class="modal-overlay hidden" id="startModal">
         <div class="modal">
@@ -2063,10 +2077,12 @@
                 ...session,
                 history: Array.isArray(session.history) ? session.history : (debugSession.history || [])
             };
+            window.PlanetDispatch?.update?.(debugSession);
 
             const history = debugSession.history || [];
             const visible = !!debugSession.enabled || history.length > 0;
             const pending = !!debugSession.restart_pending;
+            const phase = debugSession.phase || 'idle';
             const panel = document.getElementById('debugLoopPanel');
             const badge = document.getElementById('debugModeBadge');
             if (panel) {
@@ -2088,6 +2104,10 @@
                 enableControls(true);
                 const pauseButton = document.getElementById('btnPause');
                 if (pauseButton) pauseButton.disabled = true;
+            } else if (phase === 'running') {
+                setStatus('running');
+            } else if (phase === 'paused') {
+                setStatus('paused');
             }
             const remaining = debugSession.restart_in_seconds;
             const countdown = pending && remaining !== null && remaining !== undefined
@@ -2319,6 +2339,14 @@
         // ============================================================
         function updateTick(data) {
             if (data.debug_session) updateDebugSession(data.debug_session);
+            window.AnalysisWorkspace?.update?.(data);
+            if (data.narrative_status) updateLLMStatus(data.narrative_status);
+            if (data.planet && document.getElementById('planetName')) {
+                document.getElementById('planetName').textContent = data.planet;
+            }
+            if (data.debug_session?.max_ticks && document.getElementById('tickMax')) {
+                document.getElementById('tickMax').textContent = data.debug_session.max_ticks;
+            }
             // Tick counter
             const tick = data.tick;
             document.getElementById('tickNum').textContent = tick;
@@ -2388,6 +2416,7 @@
             if (state.debug_session) updateDebugSession(state.debug_session);
             updateTick({
                 tick: state.tick,
+                planet: state.planet,
                 agents: state.agents,
                 colony: state.colony_score,
                 structures: state.structures,
@@ -2403,9 +2432,9 @@
                 colony_production: state.colony_production || {},
             });
 
-            // LLM status
-            if (state.llm_status) {
-                updateLLMStatus(state.llm_status);
+            // Optional local narrative status
+            if (state.narrative_status || state.llm_status) {
+                updateLLMStatus(state.narrative_status || state.llm_status);
             }
         }
 
@@ -2786,7 +2815,7 @@
             const btnNeural = document.getElementById('tabBtnNeural');
             const btnAnalytics = document.getElementById('tabBtnAnalytics');
             if (btnSim) btnSim.classList.toggle('active', tabName === 'sim');
-            if (btnNeural) btnNeural.classList.toggle('active', tabName === 'neural');
+            if (btnNeural) btnNeural.classList.toggle('active', tabName === 'analytics');
             if (btnAnalytics) btnAnalytics.classList.toggle('active', tabName === 'analytics');
 
             // Update tab views
@@ -2794,14 +2823,13 @@
             const viewNeural = document.getElementById('viewNeural');
             const viewAnalytics = document.getElementById('viewAnalytics');
             if (viewSim) viewSim.classList.toggle('active', tabName === 'sim');
-            if (viewNeural) viewNeural.classList.toggle('active', tabName === 'neural');
+            if (viewNeural) viewNeural.classList.toggle('active', tabName === 'analytics');
             if (viewAnalytics) viewAnalytics.classList.toggle('active', tabName === 'analytics');
 
             if (tabName === 'sim') {
                 setTimeout(() => { redrawMap(); }, 50);
-            } else if (tabName === 'neural') {
-                renderNeuralFeed();
             } else if (tabName === 'analytics') {
+                renderNeuralFeed();
                 renderAnalyticsTab();
             }
         }
@@ -2841,29 +2869,30 @@
             const tokens = llm.total_tokens || 0;
             const cache = llm.cache || {};
             const cacheHitPct = ((cache.hit_rate || 0) * 100).toFixed(0) + '%';
-            const fallback = llm.fallback_calls || 0;
-            const model = llm.model || 'Llama-3.3-70B';
-            const isOnline = !llm.all_exhausted;
+            const pending = llm.pending || 0;
+            const model = llm.model || 'gpt2';
+            const status = llm.status || (llm.ready ? 'ready' : 'unconfigured');
+            const isReady = status === 'ready';
 
             // Main screen LLM summary panel
             if (document.getElementById('llmCalls')) document.getElementById('llmCalls').textContent = calls;
             if (document.getElementById('llmTokens')) document.getElementById('llmTokens').textContent = tokens.toLocaleString();
             if (document.getElementById('llmCache')) document.getElementById('llmCache').textContent = cacheHitPct;
-            if (document.getElementById('llmFallback')) document.getElementById('llmFallback').textContent = fallback;
-            if (document.getElementById('llmModelName')) document.getElementById('llmModelName').textContent = `${model} (Groq)`;
+            if (document.getElementById('llmFallback')) document.getElementById('llmFallback').textContent = pending;
+            if (document.getElementById('llmModelName')) document.getElementById('llmModelName').textContent = `${model} · local adapter`;
 
             const badge = document.getElementById('llmEngineBadge');
             if (badge) {
-                if (isOnline) {
-                    badge.textContent = 'ONLINE';
+                if (isReady) {
+                    badge.textContent = 'READY';
                     badge.style.color = '#34d399';
                     badge.style.background = 'rgba(16,185,129,0.12)';
                     badge.style.borderColor = 'rgba(16,185,129,0.3)';
                 } else {
-                    badge.textContent = 'FALLBACK';
-                    badge.style.color = '#fbbf24';
-                    badge.style.background = 'rgba(245,158,11,0.15)';
-                    badge.style.borderColor = 'rgba(245,158,11,0.35)';
+                    badge.textContent = status.toUpperCase();
+                    badge.style.color = '#94a3b8';
+                    badge.style.background = 'rgba(148,163,184,0.08)';
+                    badge.style.borderColor = 'rgba(148,163,184,0.2)';
                 }
             }
 
@@ -2875,8 +2904,10 @@
                 document.getElementById('neuralTotalTokens').textContent = tokens.toLocaleString();
             }
             if (document.getElementById('neuralDecisionRate')) {
-                const rate = calls > 0 ? (((calls - fallback) / calls) * 100).toFixed(0) + '%' : '100%';
-                document.getElementById('neuralDecisionRate').textContent = rate;
+                document.getElementById('neuralDecisionRate').textContent = 'RL ACTIVE';
+            }
+            if (document.getElementById('neuralKeyPoolStatus')) {
+                document.getElementById('neuralKeyPoolStatus').textContent = isReady ? 'Connected' : 'Not connected';
             }
         }
 
@@ -2898,6 +2929,7 @@
         }
 
         function handleEvent(event) {
+            window.AnalysisWorkspace?.event?.(event);
             const type = event.type || '';
             let cls = '';
             if (type === 'death' || type === 'warning') cls = 'death';
@@ -2953,8 +2985,8 @@
                     document.getElementById('llmLastThoughtPreview').textContent = previewText;
                 }
 
-                // Re-render feed if currently on neural tab
-                if (currentTab === 'neural') {
+                // Re-render feed while Analytics & Data is open
+                if (currentTab === 'analytics') {
                     renderNeuralFeed();
                 }
             }
@@ -5467,6 +5499,7 @@
         (async function checkStatus() {
             try {
                 const status = await apiCall('/api/simulation/status');
+                if (status?.debug_session) updateDebugSession(status.debug_session);
                 if (status && status.running) {
                     setStatus(status.paused ? 'paused' : 'running');
                     enableControls(true);

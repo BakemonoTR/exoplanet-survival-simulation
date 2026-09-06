@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex,nofollow,noarchive">
+    <title>ICARUS Mission Control</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/icarus.css?v=1">
+    <script defer src="/static/icarus.js?v=1"></script>
+</head>
+<body>
+    <div class="admin-login" id="loginView">
+        <form class="login-card" id="loginForm">
+            <div class="brand-mark">✦</div>
+            <p class="kicker">RESTRICTED SYSTEM</p>
+            <h1>ICARUS Mission Control</h1>
+            <p class="login-copy">Authenticate to manage live colony simulations and planet-specific learning.</p>
+            <label for="adminPassword">Administrator password</label>
+            <input id="adminPassword" name="password" type="password" autocomplete="current-password" required autofocus>
+            <button type="submit">Enter control room</button>
+            <p class="form-message" id="loginMessage" role="alert"></p>
+        </form>
+    </div>
+
+    <div class="admin-app" id="adminApp" hidden>
+        <header class="topbar">
+            <div class="brand"><span>✦</span><div><strong>ICARUS</strong><small>MISSION CONTROL</small></div></div>
+            <div class="topbar-state"><i id="liveDot"></i><span id="topStatus">SYSTEM IDLE</span></div>
+            <nav><a href="/" target="_blank" rel="noopener">Open public view ↗</a><button id="logoutButton" type="button">Sign out</button></nav>
+        </header>
+
+        <main>
+            <section class="page-head">
+                <div><p class="kicker">PRIVATE OPERATIONS</p><h1>Simulation command deck</h1><p>Control active attempts, planet dispatch and reinforcement-learning state.</p></div>
+                <time id="systemClock"></time>
+            </section>
+
+            <section class="status-grid" aria-label="Live simulation status">
+                <article><span>Phase</span><strong id="phaseValue">IDLE</strong><small id="runValue">No active run</small></article>
+                <article><span>Planet</span><strong id="planetValue">—</strong><small id="attemptValue">Attempt —</small></article>
+                <article><span>Progress</span><strong id="tickValue">0 / 0</strong><small id="dayValue">Day 0.0</small></article>
+                <article><span>Readiness</span><strong id="scoreValue">0%</strong><small id="crewValue">0 crew alive</small></article>
+            </section>
+
+            <div class="layout">
+                <div class="primary-column">
+                    <section class="control-card">
+                        <header><div><p class="kicker">ACTIVE ATTEMPT</p><h2>Runtime controls</h2></div><span class="state-pill" id="runtimePill">IDLE</span></header>
+                        <div class="runtime-actions">
+                            <button type="button" data-control="pause">Pause</button>
+                            <button type="button" data-control="resume">Resume</button>
+                            <button type="button" class="danger" data-control="stop">Stop campaign</button>
+                            <button type="button" class="warning" id="restartButton">Restart · discard this run's RL</button>
+                        </div>
+                        <div class="speed-control">
+                            <label for="liveSpeed">Simulation speed <output id="liveSpeedLabel">1×</output></label>
+                            <input id="liveSpeed" type="range" min="0.1" max="100" value="1" step="0.1">
+                            <div><span>0.1×</span><span>1× realtime</span><span>100×</span></div>
+                            <button type="button" id="applySpeed">Apply speed</button>
+                        </div>
+                        <p class="inline-message" id="runtimeMessage" role="status"></p>
+                    </section>
+
+                    <section class="control-card launch-card">
+                        <header><div><p class="kicker">NEW DISPATCH</p><h2>Launch simulation</h2></div></header>
+                        <div class="launch-grid">
+                            <label>Planet<select id="planetSelect"></select></label>
+                            <label>Seed<input id="seedInput" type="number" min="1" value="42"></label>
+                            <label>Maximum ticks<input id="maxTicksInput" type="number" min="1" max="51840" value="51840"></label>
+                            <label>Launch speed<select id="launchSpeed"><option value="0.5">0.5×</option><option value="1" selected>1× normal</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option><option value="25">25×</option><option value="50">50×</option></select></label>
+                        </div>
+                        <label class="check-row"><input id="dialogueEnabled" type="checkbox"><span><strong>Enable local narrative hook</strong><small>Only conversations and reflections; local GPT-2 must be connected.</small></span></label>
+                        <div class="launch-actions">
+                            <button type="button" class="primary" id="campaignButton">Start normal planet campaign</button>
+                            <button type="button" id="manualButton">Start selected planet</button>
+                        </div>
+                        <p class="inline-message" id="launchMessage" role="status"></p>
+                    </section>
+
+                    <section class="control-card telemetry-card">
+                        <header><div><p class="kicker">HIDDEN TELEMETRY</p><h2>Agent operations</h2></div><span id="telemetryTick">TICK —</span></header>
+                        <div class="agent-table-wrap"><table><thead><tr><th>Agent</th><th>Status</th><th>Position</th><th>Action</th><th>Total RL</th><th>Last reward</th></tr></thead><tbody id="agentRows"><tr><td colspan="6" class="empty">No telemetry yet.</td></tr></tbody></table></div>
+                        <details><summary>Raw state snapshot</summary><pre id="rawState">{}</pre></details>
+                    </section>
+                </div>
+
+                <aside class="side-column">
+                    <section class="control-card">
+                        <header><div><p class="kicker">LEARNING VAULT</p><h2>Planet RL policies</h2></div></header>
+                        <p class="section-copy">Reset one planet without deleting run history or policies learned on other planets.</p>
+                        <div class="planet-policy-list" id="planetPolicies"></div>
+                    </section>
+
+                    <section class="control-card">
+                        <header><div><p class="kicker">CAMPAIGN STATE</p><h2>Planet completion</h2></div></header>
+                        <div class="challenge-list" id="challengeList"><p class="empty">Campaign has not started.</p></div>
+                    </section>
+
+                    <section class="control-card">
+                        <header><div><p class="kicker">NARRATIVE LAYER</p><h2>Local model</h2></div><span class="state-pill" id="narrativePill">UNCONFIGURED</span></header>
+                        <dl class="mini-stats"><div><dt>Provider</dt><dd id="providerValue">local_gpt2</dd></div><div><dt>Model</dt><dd id="modelValue">gpt2</dd></div><div><dt>Generations</dt><dd id="generationValue">0</dd></div><div><dt>Pending</dt><dd id="pendingValue">0</dd></div></dl>
+                        <p class="section-copy" id="narrativeReason">Fine-tuned local GPT-2 provider is not connected.</p>
+                    </section>
+
+                    <section class="control-card history-card">
+                        <header><div><p class="kicker">ATTEMPT JOURNAL</p><h2>Current session</h2></div></header>
+                        <div id="attemptHistory"><p class="empty">No completed attempts.</p></div>
+                    </section>
+                </aside>
+            </div>
+        </main>
+    </div>
+</body>
+</html>

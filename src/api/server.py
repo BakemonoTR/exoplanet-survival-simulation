@@ -18,12 +18,16 @@ import json
 import logging
 import math
 import os
+import hmac
+import hashlib
+import secrets
 import threading
 import time
+from urllib.parse import urlsplit
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,6 +54,13 @@ _ws_clients: list[WebSocket] = []
 _tick_buffer: list[dict] = []  # Buffer for tick events
 _telemetry_event_buffer: list[dict] = []
 _lifecycle_lock = threading.RLock()
+_mutation_lock = asyncio.Lock()
+_admin_sessions: dict[str, dict] = {}
+_login_attempts: dict[str, list[float]] = {}
+_SESSION_COOKIE = "icarus_session"
+_SESSION_TTL_SECONDS = 8 * 60 * 60
+_live_telemetry: list[dict] = []
+_stream_sequence = 0
 _debug_session_token = 0
 _debug_restart_cancel = threading.Event()
 _debug_restart_thread: Optional[threading.Thread] = None
@@ -71,6 +82,23 @@ _debug_session: dict = {
     "dialogue_generation_enabled": False,
     "last_error": None,
 }
+
+
+def _load_private_environment() -> None:
+    """Load only local administration/narrative settings from .env."""
+    path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
+    if not os.path.isfile(path):
+        return
+    with open(path, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            key, separator, value = raw_line.strip().partition("=")
+            if separator and (
+                key.startswith("ICARUS_") or key.startswith("LOCAL_NARRATIVE_")
+            ):
+                os.environ.setdefault(key, value.strip().strip('"').strip("'"))
+
+
+_load_private_environment()
 
 
 # ============================================================
@@ -111,6 +139,14 @@ class SimulationStartRequest(BaseModel):
 class ControlRequest(BaseModel):
     action: str  # "pause", "resume", "stop", "speed"
     value: Optional[float] = None  # For speed: multiplier
+
+
+class AdminLoginRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class RestartRequest(BaseModel):
+    discard_current_rl: bool = True
 
 
 # ============================================================
@@ -156,6 +192,17 @@ def _get_challenge_coordinator() -> PlanetChallengeCoordinator:
             state_path=os.path.join(project_root, "data", "challenge_state.json"),
         )
         return _challenge
+
+
+def _planet_ids() -> list[str]:
+    planets_dir = os.path.abspath(os.path.join(
+        os.path.dirname(__file__), "..", "..", "config", "planets"
+    ))
+    return sorted(
+        os.path.splitext(name)[0]
+        for name in os.listdir(planets_dir)
+        if name.endswith(".json")
+    )
 
 
 def _challenge_snapshot() -> Optional[dict]:
@@ -207,22 +254,40 @@ def _debug_session_snapshot() -> dict:
                 _debug_session.get("dialogue_generation_enabled", False)
             ),
             "last_error": _debug_session.get("last_error"),
+            "phase": _debug_session.get("phase", "idle"),
+            "run_id": _debug_session.get("run_id"),
+            "wheel": {
+                "active": _debug_session.get("phase") == "wheel",
+                "selected_planet": _debug_session.get("planet"),
+                "spin_id": _debug_session.get("spin_id", 0),
+                "duration_seconds": float(
+                    _debug_session.get("restart_delay_seconds", 4.0)
+                ),
+                "ends_at": restart_at if pending else None,
+                "remaining_seconds": restart_in,
+            },
             "history": history,
             "challenge": _challenge_snapshot(),
         }
 
 
+def _append_stream_item(item: dict) -> None:
+    global _stream_sequence
+    with _lifecycle_lock:
+        _stream_sequence += 1
+        item["sequence"] = _stream_sequence
+        _tick_buffer.append(item)
+        if len(_tick_buffer) > 200:
+            del _tick_buffer[:-100]
+
+
 def _emit_debug_status() -> None:
     """Queue one debug-session update for every live WebSocket client."""
-    global _tick_buffer
     item = {
         "type": "debug_status",
         "data": _debug_session_snapshot(),
     }
-    with _lifecycle_lock:
-        _tick_buffer.append(make_safe_serializable(item))
-        if len(_tick_buffer) > 200:
-            _tick_buffer = _tick_buffer[-100:]
+    _append_stream_item(make_safe_serializable(item))
 
 
 def _configure_debug_session(req: SimulationStartRequest) -> int:
@@ -246,14 +311,17 @@ def _configure_debug_session(req: SimulationStartRequest) -> int:
         _debug_session_token += 1
         _debug_restart_cancel = threading.Event()
         _debug_session = {
-            "enabled": bool(req.debug_auto_restart),
+            "enabled": bool(req.debug_auto_restart or req.challenge_mode),
             "attempt": 0,
             "max_attempts": max_attempts,
             "limit_reached": False,
             "restart_pending": False,
             "restart_at": None,
             "restart_delay_seconds": float(
-                req.debug_restart_delay_seconds
+                4.0
+                if req.challenge_mode
+                and "debug_restart_delay_seconds" not in fields_set
+                else req.debug_restart_delay_seconds
             ),
             "planet": req.planet,
             "seed": int(req.seed),
@@ -266,6 +334,9 @@ def _configure_debug_session(req: SimulationStartRequest) -> int:
                 req.dialogue_generation_enabled
             ),
             "last_error": None,
+            "phase": "idle",
+            "run_id": None,
+            "spin_id": 0,
         }
         return _debug_session_token
 
@@ -277,6 +348,7 @@ def _disable_debug_loop(*, emit: bool = True) -> None:
         _debug_session["enabled"] = False
         _debug_session["restart_pending"] = False
         _debug_session["restart_at"] = None
+        _debug_session["phase"] = "stopped"
     if emit:
         _emit_debug_status()
 
@@ -336,10 +408,174 @@ app = FastAPI(
 # CORS for frontend dev
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        origin.strip()
+        for origin in os.getenv("ICARUS_CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _admin_configured() -> bool:
+    return bool(
+        os.environ.get("ICARUS_ADMIN_PASSWORD")
+        or os.environ.get("ICARUS_ADMIN_TOKEN")
+    )
+
+
+def _credential_digest(value: str) -> bytes:
+    return hashlib.sha256(value.encode("utf-8")).digest()
+
+
+def _session_from_request(request: Request) -> Optional[dict]:
+    token = request.cookies.get(_SESSION_COOKIE, "")
+    session = _admin_sessions.get(token)
+    if session and session["expires_at"] > time.time():
+        configured = os.environ.get("ICARUS_ADMIN_PASSWORD", "")
+        if configured and hmac.compare_digest(
+            session["credential_digest"], _credential_digest(configured)
+        ):
+            return session
+    if token:
+        _admin_sessions.pop(token, None)
+    return None
+
+
+def _same_origin(request: Request) -> bool:
+    if request.headers.get("sec-fetch-site") == "cross-site":
+        return False
+    origin = request.headers.get("origin")
+    if not origin:
+        return True
+    source = urlsplit(origin)
+    target = urlsplit(str(request.base_url))
+    return source.scheme == target.scheme and source.netloc == target.netloc
+
+
+@app.middleware("http")
+async def protect_simulation_mutations(request: Request, call_next):
+    path = request.url.path
+    mutation = (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and path.startswith("/api/")
+    )
+    private_read = (
+        path.startswith("/api/admin/")
+        and path != "/api/admin/session"
+    )
+    if mutation or private_read:
+        if not _admin_configured():
+            return JSONResponse(
+                {"detail": "Set ICARUS_ADMIN_PASSWORD to enable administration"},
+                status_code=503,
+            )
+        if mutation and not _same_origin(request):
+            return JSONResponse(
+                {"detail": "Cross-origin administration is forbidden"},
+                status_code=403,
+            )
+        if path != "/api/admin/login":
+            bearer = request.headers.get("authorization", "")
+            configured_token = os.environ.get("ICARUS_ADMIN_TOKEN", "")
+            token_ok = bool(
+                configured_token
+                and hmac.compare_digest(
+                    bearer.encode("utf-8"),
+                    ("Bearer " + configured_token).encode("utf-8"),
+                )
+            )
+            session = _session_from_request(request)
+            if not token_ok and not session:
+                return JSONResponse(
+                    {"detail": "Administrator login required"}, status_code=401
+                )
+            if mutation and not token_ok and not hmac.compare_digest(
+                request.headers.get("x-csrf-token", "").encode("utf-8"),
+                session["csrf_token"].encode("utf-8"),
+            ):
+                return JSONResponse(
+                    {"detail": "Invalid CSRF token; sign in again"},
+                    status_code=403,
+                )
+
+    if mutation:
+        async with _mutation_lock:
+            response = await call_next(request)
+    else:
+        response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    if path.startswith("/api/admin/") or path.startswith("/icarus"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+    return response
+
+
+@app.get("/api/admin/session")
+async def admin_session(request: Request):
+    session = _session_from_request(request)
+    return {
+        "authenticated": bool(session),
+        "configured": _admin_configured(),
+        "csrf_token": session["csrf_token"] if session else None,
+    }
+
+
+@app.post("/api/admin/login")
+async def admin_login(req: AdminLoginRequest, request: Request):
+    host = request.client.host if request.client else "unknown"
+    now = time.time()
+    recent = [
+        stamp for stamp in _login_attempts.get(host, []) if stamp > now - 300
+    ]
+    if len(recent) >= 8:
+        raise HTTPException(429, "Too many sign-in attempts; retry in five minutes")
+    _login_attempts[host] = [*recent, now]
+    password = os.environ.get("ICARUS_ADMIN_PASSWORD", "")
+    if not password or not hmac.compare_digest(
+        _credential_digest(req.password), _credential_digest(password)
+    ):
+        raise HTTPException(401, "Incorrect administrator password")
+    _login_attempts.pop(host, None)
+    for key in list(_admin_sessions):
+        if _admin_sessions[key]["expires_at"] <= now:
+            del _admin_sessions[key]
+    while len(_admin_sessions) >= 100:
+        del _admin_sessions[next(iter(_admin_sessions))]
+    old_token = request.cookies.get(_SESSION_COOKIE)
+    if old_token:
+        _admin_sessions.pop(old_token, None)
+    token = secrets.token_urlsafe(48)
+    csrf = secrets.token_urlsafe(32)
+    _admin_sessions[token] = {
+        "csrf_token": csrf,
+        "expires_at": now + _SESSION_TTL_SECONDS,
+        "credential_digest": _credential_digest(password),
+    }
+    response = JSONResponse({"authenticated": True, "csrf_token": csrf})
+    response.set_cookie(
+        _SESSION_COOKIE,
+        token,
+        httponly=True,
+        samesite="strict",
+        secure=(
+            request.url.scheme == "https"
+            or os.environ.get("ICARUS_COOKIE_SECURE") == "1"
+        ),
+        max_age=_SESSION_TTL_SECONDS,
+        path="/",
+    )
+    return response
+
+
+@app.post("/api/admin/logout")
+async def admin_logout(request: Request):
+    _admin_sessions.pop(request.cookies.get(_SESSION_COOKIE, ""), None)
+    response = JSONResponse({"authenticated": False})
+    response.delete_cookie(_SESSION_COOKIE, path="/")
+    return response
 
 
 # ============================================================
@@ -365,7 +601,7 @@ def make_safe_serializable(obj):
 
 def on_tick_callback(tick: int, state: dict):
     """Called by engine on each tick. Buffers state for WebSocket broadcast."""
-    global _tick_buffer
+    global _live_telemetry
     
     # Filter out ticks from duplicate/orphaned background engine threads
     if _engine is None or state.get("engine_id") != _engine.engine_id:
@@ -373,6 +609,8 @@ def on_tick_callback(tick: int, state: dict):
     
     compact = {
         "tick": tick,
+        "engine_id": state.get("engine_id"),
+        "planet": state.get("planet"),
         "agents": [
             {
                 "id": a["id"],
@@ -393,8 +631,15 @@ def on_tick_callback(tick: int, state: dict):
                 "in_habitat": bool(a.get("in_habitat", False)),
                 "last_decision": a.get("last_decision", {}),
                 "rl_policy": a.get("rl_policy", {}),
-                "rl_reward": round(float(a.get("rl_reward_accumulated", 0.0)), 2),
-                "q_states": a.get("q_table_states", 0),
+                "relationships": a.get("relationships", []),
+                "thoughts": a.get("thoughts", []),
+                "narrative_status": a.get("narrative_status", {}),
+                "rl_reward": round(float(
+                    a.get("rl_policy", {}).get("total_reward", 0.0)
+                ), 2),
+                "q_states": int(
+                    a.get("rl_policy", {}).get("learned_states", 0)
+                ),
             }
             for a in state.get("agents", [])
         ],
@@ -409,11 +654,42 @@ def on_tick_callback(tick: int, state: dict):
         "cell_geology": state.get("cell_geology", []),
         "spoil_piles": state.get("spoil_piles", []),
         "surface_fleet": state.get("surface_fleet", {}),
+        "utility_network": state.get("utility_network", {}),
+        "narrative_status": state.get(
+            "narrative_status", state.get("llm_status", {})
+        ),
+        "strategic_rl": state.get("strategic_rl", {}),
         "debug_session": _debug_session_snapshot(),
     }
-    _tick_buffer.append(make_safe_serializable(compact))
-    if len(_tick_buffer) > 200:
-        _tick_buffer = _tick_buffer[-100:]
+    compact = make_safe_serializable(compact)
+    _append_stream_item(compact)
+
+    telemetry_agents = []
+    for agent in compact["agents"]:
+        policy = dict(agent.get("rl_policy", {}))
+        policy["reward_history"] = [
+            reward
+            for reward in policy.get("reward_history", [])
+            if reward.get("tick") == tick
+        ]
+        telemetry_agents.append({**agent, "rl_policy": policy})
+
+    detail = {
+        "tick": tick,
+        "run_id": _debug_session.get("run_id"),
+        "agents": telemetry_agents,
+        "colony": compact["colony"],
+        "events": make_safe_serializable([
+            event
+            for event in _telemetry_event_buffer
+            if event.get("tick", tick) == tick
+        ]),
+        "narrative_status": compact["narrative_status"],
+    }
+    _live_telemetry.append(detail)
+    _live_telemetry = _live_telemetry[-600:]
+    if _db:
+        _db.record_tick_telemetry(tick, detail)
     
     # DB checkpoint every 10 ticks
     if _engine and _db and tick % 10 == 0:
@@ -449,15 +725,14 @@ def on_tick_callback(tick: int, state: dict):
 
 def on_event_callback(event: dict):
     """Called by engine on notable events."""
-    global _tick_buffer, _telemetry_event_buffer
+    global _telemetry_event_buffer
+    event = {"tick": getattr(_engine, "current_tick", 0), **event}
     _telemetry_event_buffer.append(dict(event))
     compact = {
         "type": "event",
         "data": event,
     }
-    _tick_buffer.append(compact)
-    if len(_tick_buffer) > 200:
-        _tick_buffer = _tick_buffer[-100:]
+    _append_stream_item(compact)
 
 
 def _finish_debug_attempt(
@@ -502,6 +777,7 @@ def _finish_debug_attempt(
             _debug_session["limit_reached"] = False
             _debug_session["restart_pending"] = False
             _debug_session["restart_at"] = None
+            _debug_session["phase"] = "stopped"
             cancel_event = _debug_restart_cancel
         else:
             _debug_session["last_error"] = None
@@ -559,6 +835,28 @@ def _finish_debug_attempt(
                 time.time() + float(_debug_session["restart_delay_seconds"])
                 if should_restart else None
             )
+            if should_restart and _debug_session.get("challenge_mode"):
+                coordinator = _get_challenge_coordinator()
+                spin = getattr(coordinator, "spin_next_planet", None)
+                next_planet = (
+                    spin()
+                    if callable(spin)
+                    else next(iter(challenge_result.get("remaining_planets", [])), None)
+                )
+                if next_planet is None:
+                    should_restart = False
+                    _debug_session["enabled"] = False
+                    _debug_session["restart_pending"] = False
+                    _debug_session["restart_at"] = None
+                    _debug_session["phase"] = "stopped"
+                else:
+                    _debug_session["planet"] = next_planet
+                    _debug_session["phase"] = "wheel"
+                    _debug_session["spin_id"] = time.time_ns()
+            elif should_restart:
+                _debug_session["phase"] = "restarting"
+            else:
+                _debug_session["phase"] = "stopped"
             cancel_event = _debug_restart_cancel
 
     _emit_debug_status()
@@ -610,6 +908,7 @@ def _launch_simulation_attempt(
 ) -> Optional[dict]:
     """Create one clean engine while retaining planet-scoped DB policies."""
     global _engine, _engine_thread, _tick_buffer, _telemetry_event_buffer
+    global _live_telemetry
     with _lifecycle_lock:
         if session_token != _debug_session_token:
             return None
@@ -661,6 +960,7 @@ def _launch_simulation_attempt(
             on_event=on_event_callback,
             db=_db,
         )
+        engine.capture_every_tick = True
         engine.decision_engine.dialogue_generation_enabled = bool(
             _debug_session.get("dialogue_generation_enabled", False)
         )
@@ -696,6 +996,9 @@ def _launch_simulation_attempt(
                 },
             )
         _engine = engine
+        _debug_session["run_id"] = run_id
+        _debug_session["phase"] = "running"
+        _live_telemetry.clear()
 
         def run_engine():
             try:
@@ -710,6 +1013,7 @@ def _launch_simulation_attempt(
                     "deaths": [],
                     "error": str(exc),
                 }
+            engine.llm_client.close()
             if _db:
                 try:
                     _db.end_run(
@@ -749,6 +1053,57 @@ def _launch_simulation_attempt(
     }
 
 
+def _queue_campaign_dispatch(session_token: int) -> dict:
+    """Expose the configured wheel phase before the first attempt."""
+    global _debug_restart_thread
+    with _lifecycle_lock:
+        coordinator = _get_challenge_coordinator()
+        coordinator.start()
+        planet = coordinator.spin_next_planet()
+        if planet is None:
+            _disable_debug_loop(emit=False)
+            raise HTTPException(409, "Campaign is complete or its deadline expired")
+        _debug_session["planet"] = planet
+        _debug_session["phase"] = "wheel"
+        _debug_session["spin_id"] = time.time_ns()
+        _debug_session["restart_pending"] = True
+        delay = float(_debug_session["restart_delay_seconds"])
+        _debug_session["restart_at"] = time.time() + delay
+        cancel_event = _debug_restart_cancel
+    _emit_debug_status()
+
+    def dispatch_after_wheel() -> None:
+        if cancel_event.wait(delay):
+            return
+        with _lifecycle_lock:
+            if session_token != _debug_session_token:
+                return
+            _debug_session["restart_pending"] = False
+            _debug_session["restart_at"] = None
+        try:
+            _launch_simulation_attempt(session_token, is_restart=True)
+        except Exception as exc:
+            logger.exception("Campaign dispatch failed")
+            with _lifecycle_lock:
+                if session_token == _debug_session_token:
+                    _debug_session["enabled"] = False
+                    _debug_session["phase"] = "stopped"
+                    _debug_session["last_error"] = str(exc)
+            _emit_debug_status()
+
+    _debug_restart_thread = threading.Thread(
+        target=dispatch_after_wheel,
+        name="campaign-dispatch",
+        daemon=True,
+    )
+    _debug_restart_thread.start()
+    return {
+        "status": "dispatching",
+        "planet": planet,
+        "debug_session": _debug_session_snapshot(),
+    }
+
+
 # ============================================================
 # SIMULATION ENDPOINTS
 # ============================================================
@@ -758,7 +1113,7 @@ async def start_simulation(req: SimulationStartRequest):
     """Start a new simulation."""
     config_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'config')
     planet_path = os.path.join(config_dir, 'planets', f'{req.planet}.json')
-    if not req.challenge_mode and not os.path.exists(planet_path):
+    if not req.challenge_mode and req.planet not in _planet_ids():
         available = [
             f.replace('.json', '')
             for f in os.listdir(os.path.join(config_dir, 'planets'))
@@ -785,6 +1140,9 @@ async def start_simulation(req: SimulationStartRequest):
             raise HTTPException(
                 409, "Previous simulation is still shutting down"
             )
+
+    if req.challenge_mode:
+        return _queue_campaign_dispatch(session_token)
 
     launched = _launch_simulation_attempt(session_token)
     if not launched:
@@ -845,11 +1203,15 @@ async def control_simulation(req: ControlRequest):
             }
         raise HTTPException(400, "No simulation running")
     
+    if req.action in {"pause", "resume"} and not _engine.running:
+        raise HTTPException(409, "No active attempt to pause or resume")
     if req.action == "pause":
         _engine.pause()
+        _debug_session["phase"] = "paused"
         return {"status": "paused"}
     elif req.action == "resume":
         _engine.resume()
+        _debug_session["phase"] = "running"
         return {"status": "resumed"}
     elif req.action == "stop":
         _disable_debug_loop()
@@ -859,8 +1221,13 @@ async def control_simulation(req: ControlRequest):
             "debug_session": _debug_session_snapshot(),
         }
     elif req.action == "speed":
-        if req.value:
+        if (
+            req.value is not None
+            and math.isfinite(req.value)
+            and 0.1 <= req.value <= 100.0
+        ):
             _engine.set_speed(req.value)
+            _debug_session["tick_speed"] = _engine.tick_speed
             return {"status": "speed_changed", "multiplier": req.value}
     
     raise HTTPException(400, f"Unknown action: {req.action}")
@@ -886,6 +1253,127 @@ async def reset_rl_policies():
             raise HTTPException(409, "Simulation is still shutting down")
     deleted = _db.reset_rl_policies()
     return {"status": "reset", **deleted}
+
+
+async def _stop_engine_and_join() -> None:
+    _disable_debug_loop()
+    if _engine:
+        _engine.stop()
+    if (
+        _engine_thread
+        and _engine_thread.is_alive()
+        and _engine_thread is not threading.current_thread()
+    ):
+        await asyncio.to_thread(_engine_thread.join, 10.0)
+        if _engine_thread.is_alive():
+            raise HTTPException(409, "Simulation is still shutting down; retry")
+
+
+@app.post("/api/admin/start")
+async def admin_start(req: SimulationStartRequest):
+    return await start_simulation(req)
+
+
+@app.post("/api/admin/control")
+async def admin_control(req: ControlRequest):
+    return await control_simulation(req)
+
+
+@app.post("/api/admin/restart")
+async def admin_restart(req: RestartRequest):
+    if (
+        not _engine
+        or _debug_session.get("run_id") is None
+        or _debug_session.get("restart_pending")
+    ):
+        raise HTTPException(409, "Select an active or stopped attempt to restart")
+    previous = dict(_debug_session)
+    run_id = int(previous["run_id"])
+    await _stop_engine_and_join()
+    if req.discard_current_rl:
+        if not _db:
+            raise HTTPException(503, "Database not available")
+        _db.discard_run_rl(run_id)
+    retry = SimulationStartRequest(
+        planet=previous["planet"],
+        seed=int(previous.get("active_seed") or previous["seed"]),
+        max_ticks=int(previous["max_ticks"]),
+        tick_speed=float(previous["tick_speed"]),
+        debug_auto_restart=bool(
+            previous.get("enabled") and not previous.get("challenge_mode")
+        ),
+        debug_max_attempts=int(previous.get("max_attempts", 15)),
+        debug_restart_delay_seconds=float(
+            previous.get("restart_delay_seconds", 2.0)
+        ),
+        challenge_mode=bool(previous.get("challenge_mode", False)),
+        dialogue_generation_enabled=bool(
+            previous.get("dialogue_generation_enabled", False)
+        ),
+    )
+    return await start_simulation(retry)
+
+
+@app.post("/api/admin/planets/{planet}/reset-rl")
+async def admin_reset_planet(planet: str):
+    if planet not in _planet_ids():
+        raise HTTPException(404, "Unknown planet")
+    if not _db:
+        raise HTTPException(503, "Database not available")
+    active_planet = _debug_session.get("planet")
+    if active_planet == planet and (
+        (_engine and _engine.running)
+        or (_engine_thread and _engine_thread.is_alive())
+        or _debug_session.get("restart_pending")
+    ):
+        await _stop_engine_and_join()
+    deleted = _db.reset_rl_policies(planet)
+    return {"status": "reset", "planet": planet, **deleted}
+
+
+@app.get("/api/admin/status")
+async def admin_status():
+    status = await get_status()
+    status["planets"] = _planet_ids()
+    status["planet_rl"] = _db.get_planet_rl_summary() if _db else {}
+    status["narrative_status"] = (
+        _engine.llm_client.get_status()
+        if _engine
+        else {"provider": "local_gpt2", "model": "gpt2", "status": "unconfigured"}
+    )
+    return make_safe_serializable(status)
+
+
+@app.get("/api/simulation/telemetry")
+async def get_simulation_telemetry(
+    run_id: Optional[int] = None,
+    after_tick: int = -1,
+    limit: int = Query(default=100, ge=1, le=200),
+    latest: bool = False,
+):
+    selected_run = run_id if run_id is not None else _debug_session.get("run_id")
+    if selected_run is None or not _db:
+        return {
+            "run_id": selected_run,
+            "ticks": [],
+            "has_more": False,
+            "next_after_tick": after_tick,
+        }
+    persisted = _db.get_tick_telemetry(
+        selected_run, after_tick, limit, latest=latest
+    )
+    combined = {row["tick"]: row for row in persisted}
+    for row in list(_live_telemetry):
+        if row.get("run_id") == selected_run and row["tick"] > after_tick:
+            combined[row["tick"]] = row
+    ordered = sorted(combined.values(), key=lambda row: row["tick"])
+    rows = ordered[-limit:] if latest else ordered[:limit]
+    return {
+        "run_id": selected_run,
+        "ticks": rows,
+        "has_more": len(rows) == limit,
+        "next_after_tick": rows[-1]["tick"] if rows else after_tick,
+    }
 
 
 @app.get("/api/challenge/status")
@@ -961,36 +1449,35 @@ async def websocket_endpoint(ws: WebSocket):
             })
         
         # Stream tick updates persistently from the current point onwards
-        last_sent_idx = len(_tick_buffer)
+        last_sent_sequence = _stream_sequence
         while True:
             cur_engine_id = getattr(_engine, 'engine_id', None) if _engine else None
             
             # Detect fresh simulation launch
             if cur_engine_id != last_engine_id:
                 last_engine_id = cur_engine_id
-                last_sent_idx = 0
                 end_sent_engine_id = None
                 if _engine:
                     await ws.send_json({
                         "type": "init",
                         "data": _state_snapshot_with_debug(_engine),
                     })
-                
-            # If tick buffer was cleared/reset
-            if last_sent_idx > len(_tick_buffer):
-                last_sent_idx = len(_tick_buffer)
-                
-            # Check for new tick data
-            if last_sent_idx < len(_tick_buffer):
-                for item in _tick_buffer[last_sent_idx:]:
-                    try:
-                        await ws.send_json(item)
-                    except Exception:
-                        break
-                last_sent_idx = len(_tick_buffer)
+                last_sent_sequence = _stream_sequence
+
+            for item in list(_tick_buffer):
+                sequence = item.get("sequence", 0)
+                if sequence > last_sent_sequence:
+                    await ws.send_json(item)
+                    last_sent_sequence = sequence
             
             # Check if simulation ended (send end event once per engine run)
-            if _engine and not _engine.running and _engine.end_reason and end_sent_engine_id != cur_engine_id:
+            if (
+                _engine
+                and not _engine.running
+                and not (_engine_thread and _engine_thread.is_alive())
+                and _engine.end_reason
+                and end_sent_engine_id != cur_engine_id
+            ):
                 end_sent_engine_id = cur_engine_id
                 try:
                     final_report = _engine._get_final_report()
@@ -1041,6 +1528,15 @@ async def serve_index():
             "WS /ws/live",
         ]
     })
+
+
+@app.get("/icarus")
+@app.get("/icarus/")
+async def serve_icarus():
+    admin_path = os.path.join(frontend_dir, "icarus.html")
+    if os.path.exists(admin_path):
+        return FileResponse(admin_path)
+    raise HTTPException(404, "Mission control frontend is unavailable")
 
 
 # ============================================================

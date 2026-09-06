@@ -55,6 +55,7 @@ class ChallengeState:
     status: str = "pending"
     wheel_seed: int = 0
     wheel_spins: int = 0
+    last_planet: Optional[str] = None
 
 
 class PlanetChallengeCoordinator:
@@ -129,7 +130,12 @@ class PlanetChallengeCoordinator:
         rng = random.Random(
             f"{self.state.wheel_seed}:{self.state.wheel_spins}"
         )
-        planet = rng.choice(sorted(self.state.remaining_planets))
+        candidates = [
+            planet
+            for planet in self.state.remaining_planets
+            if planet != self.state.last_planet
+        ] or list(self.state.remaining_planets)
+        planet = rng.choice(sorted(candidates))
         self.state.wheel_spins += 1
         self.state.active_planet = planet
         self._save()
@@ -147,6 +153,7 @@ class PlanetChallengeCoordinator:
             self.state.best_score_by_planet.get(planet, 0.0), score
         )
         self.state.active_planet = None
+        self.state.last_planet = planet
 
         expired = self._expire_if_needed()
         succeeded = (

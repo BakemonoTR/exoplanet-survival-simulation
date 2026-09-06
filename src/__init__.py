@@ -2,7 +2,7 @@
 Exoplanet Survival Simulation — Research Project
 Microsoft AI Innovators Program
 
-A scientifically grounded, LLM-powered multi-agent survival simulation
+A scientifically grounded, reinforcement-learning multi-agent survival simulation
 on real exoplanets. Six agents prepare infrastructure for 106 occupants using
 procedurally generated worlds, realistic resource systems, and
 emergent cooperative behavior.

@@ -2,11 +2,11 @@
 
 <div align="center">
 
-**A scientifically grounded, LLM-powered multi-agent survival simulation on real exoplanets.**
+**A scientifically grounded, reinforcement-learning multi-agent survival simulation on real exoplanets.**
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![Groq](https://img.shields.io/badge/Groq-LLaMA_3.3_70B-F55036)](https://groq.com)
+[![Narrative](https://img.shields.io/badge/Narrative-Local_GPT--2-607D8B)](#local-narrative-layer)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -17,9 +17,9 @@
 
 This project is a **research simulation** developed for the **Microsoft AI Innovators Program**. It models a realistic colony-building scenario where **6 autonomous AI agents** cooperate to prepare life-sustaining infrastructure for **106 incoming colonists** on scientifically accurate exoplanet environments.
 
-Each agent is powered by **LLaMA 3.3 70B** (via Groq) and makes decisions through a sophisticated pipeline combining:
-- 🧠 **LLM-based strategic reasoning** with contextual prompts
-- 🎯 **Reinforcement Learning** for effort allocation optimization
+Agent actions are controlled by deterministic simulation logic and **reinforcement learning**. An optional local GPT-2 adapter is reserved for non-authoritative dialogue and reflections:
+- 🎯 **Reinforcement Learning** for action and effort-allocation optimization
+- 💬 **Local narrative generation** for dialogue and reflections only
 - 🔄 **Emergent cooperative behavior** under resource constraints
 - 📊 **Realistic physics and resource systems** grounded in planetary science
 
@@ -44,7 +44,7 @@ src/
 │   └── strategic_rl.py  # Reinforcement learning module
 ├── orchestration/   # Simulation engine
 │   ├── engine.py        # Main simulation loop & tick processing
-│   ├── llm_client.py    # Groq API client with key rotation
+│   ├── llm_client.py    # Optional local GPT-2 narrative adapter
 │   ├── challenge.py     # Dynamic challenge system
 │   └── fallback.py      # Fallback decision logic
 ├── systems/         # Game systems
@@ -71,7 +71,8 @@ config/
 ├── colony_targets.json
 └── recipes.json     # Manufacturing recipes
 frontend/
-└── index.html       # Real-time simulation dashboard
+├── index.html       # Public observation dashboard
+└── icarus.html      # Private mission-control panel
 ```
 
 ## 🚀 Quick Start
@@ -79,7 +80,6 @@ frontend/
 ### Prerequisites
 
 - Python 3.10+
-- [Groq API key](https://console.groq.com/keys) (free tier available)
 
 ### Installation
 
@@ -96,9 +96,9 @@ python -m venv .venv
 # Install dependencies
 pip install -r requirements.txt
 
-# Configure API keys
+# Configure local settings
 cp .env.example .env
-# Edit .env and add your Groq API key(s)
+# Set ICARUS_ADMIN_PASSWORD before exposing the service
 ```
 
 ### Running the Simulation
@@ -118,12 +118,13 @@ python run.py --port 8080
 ```
 
 Then open `http://localhost:8000` in your browser to view the real-time simulation dashboard.
+The protected mission-control panel is available at `http://localhost:8000/icarus`.
 
 ## 🎮 Key Features
 
 ### Multi-Agent AI System
 - **6 specialized agents** with distinct roles (engineering, agriculture, medical, etc.)
-- Each agent uses **LLaMA 3.3 70B** for strategic decision-making
+- Agent actions remain deterministic and RL-authoritative
 - **Reinforcement learning** optimizes effort allocation across tasks
 - **Semantic memory** with sentence-transformer embeddings for experience recall
 - **Self-reflection** system for learning from past decisions
@@ -141,6 +142,11 @@ Then open `http://localhost:8000` in your browser to view the real-time simulati
 - **Tick-by-tick** simulation visualization
 - **Resource graphs** and agent status monitoring
 - **Colony readiness score** tracking
+
+### Local Narrative Layer
+- No hosted language-model API is required
+- A fine-tuned local GPT-2 provider can be connected through `LocalNarrativeProvider`
+- Generated text is limited to conversations and reflections and cannot alter physics, rewards, trust, inventory, or actions
 
 ## 🧪 Testing
 
@@ -178,8 +184,6 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 ## 🙏 Acknowledgments
 
 - **Microsoft AI Innovators Program** — for the opportunity and support
-- **Groq** — for ultra-fast LLM inference
-- **Meta AI** — for the LLaMA 3.3 70B model
 - **NASA Exoplanet Archive** — for planetary data
 
 ---

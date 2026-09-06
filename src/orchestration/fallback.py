@@ -1,9 +1,8 @@
 """
 Deterministic Fallback Decision Engine.
 
-When all LLM API keys are exhausted, this engine makes rule-based decisions
-so the simulation NEVER stops. Produces output in the same JSON format
-as the LLM, making it a transparent drop-in replacement.
+This engine makes rule-based decisions so the simulation remains independent
+from the optional local narrative layer.
 
 Decision priority (based on survival psychology):
 1. Immediate survival threats (O2, thirst, hunger, hypothermia)
@@ -22,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 class FallbackDecisionEngine:
     """
-    Rule-based decision engine for when all LLM APIs are exhausted.
+    Rule-based decision engine for simulation actions.
     
     Mimics rational agent behavior using simple priority rules.
     Output format matches LLM JSON schema exactly.

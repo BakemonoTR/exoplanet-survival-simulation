@@ -14,7 +14,7 @@ import logging
 from typing import Optional
 
 from src.memory.vector_store import MemoryManager
-from src.orchestration.llm_client import GroqLLMClient, LLMCallType
+from src.orchestration.llm_client import LocalNarrativeClient, LLMCallType
 from src.agents.prompts import build_reflection_prompt
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,7 @@ class ReflectionSystem:
     """
     
     def __init__(self, memory_manager: MemoryManager,
-                 llm_client: GroqLLMClient,
+                 llm_client: LocalNarrativeClient,
                  social_graph: SocialGraph = None):
         self.memory = memory_manager
         self.llm = llm_client

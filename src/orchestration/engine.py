@@ -4,7 +4,7 @@ Simulation Engine — Main tick loop.
 Orchestrates all systems:
 1. Event scheduling (flares, quakes, storms)
 2. Agent physiology (needs decay, radiation, EVA)
-3. Decision making (LLM strategic + tactical, or fallback)
+3. Deterministic and reinforcement-learning decision making
 4. Action execution (move, gather, build, eat, sleep...)
 5. Colony score tracking
 6. State persistence
@@ -21,6 +21,7 @@ import os
 import random
 import math
 import uuid
+import threading
 from typing import Optional, Callable
 
 import numpy as np
@@ -34,7 +35,7 @@ from src.agents.strategic_rl import (
     ColonyStrategicPolicy,
     STRATEGY_POLICY_ID,
 )
-from src.orchestration.llm_client import GroqLLMClient, LLMCallType
+from src.orchestration.llm_client import LocalNarrativeClient, LLMCallType
 from src.orchestration.fallback import FallbackDecisionEngine
 from src.memory.vector_store import MemoryManager
 from src.systems.colony_score import ColonyScore
@@ -69,8 +70,8 @@ class SimulationEngine:
     """
     
     # Configuration
-    STRATEGIC_EVAL_INTERVAL = 10   # Ticks between strategic LLM calls
-    REFLECTION_INTERVAL = 20       # Ticks between reflection LLM calls
+    STRATEGIC_EVAL_INTERVAL = 10   # Ticks between strategic evaluations
+    REFLECTION_INTERVAL = 20       # Optional local narrative cadence
     CHECKPOINT_INTERVAL = 10       # Ticks between state saves
     # Backwards-compatible class value. Instance defaults come from the
     # validated mission profile (360 days / 51,840 ticks).
@@ -314,7 +315,7 @@ class SimulationEngine:
         self.colony_score.set_structure_capacity_multiplier(
             "solar_panel", planning_firm_multiplier
         )
-        self.llm_client = GroqLLMClient()
+        self.llm_client = LocalNarrativeClient()
         self.memory = MemoryManager()
         self.decision_engine = DecisionEngine(
             llm_client=self.llm_client,
@@ -368,6 +369,7 @@ class SimulationEngine:
         self.tick_speed = tick_speed or self.TARGET_TICK_SECONDS
         self.running: bool = False
         self.paused: bool = False
+        self._stop_event = threading.Event()
         # Physical Base Logistics: Central Storage Depot Silo at Landing Zone
         self.central_depot_inventory: dict[str, int] = {
             # Planned precursor reserve: 30 x 0.36 kg field cylinders. These
@@ -8332,7 +8334,7 @@ class SimulationEngine:
             
             sleep_time = max(0, self.tick_speed - elapsed)
             if sleep_time > 0:
-                time.sleep(sleep_time)
+                self._stop_event.wait(sleep_time)
             
             self.current_tick += 1
 
@@ -8379,6 +8381,9 @@ class SimulationEngine:
         if not getattr(self, "_initialized", False):
             self._init_agents()
             self._initialized = True
+
+        for crew in self.agents:
+            crew._telemetry_tick = self.current_tick
 
         # Meals are charged when an eat action consumes a physical source.
         # This counter is telemetry only; it must never drain a store again.
@@ -8543,7 +8548,10 @@ class SimulationEngine:
             if not getattr(agent, "_rl_transition_pending", False):
                 continue
             # Macro strategic reward from colony progress
-            rl_reward = max(-5.0, min(5.0, score_delta * 20.0))
+            progress_reward = max(-5.0, min(5.0, score_delta * 20.0))
+            acute_hazard_reward = 0.0
+            outdoor_cold_reward = 0.0
+            rl_reward = progress_reward
             
             # Never reward the label of a repeated build/refine/gather tick.
             # Physical completions already issue delayed rewards at their
@@ -8556,11 +8564,13 @@ class SimulationEngine:
             # Physical output/completion and terminal survival supply rewards;
             # waiting or reselecting sleep must not farm a healthy-state bonus.
             if temp < 30 or agent.needs.hunger < 15 or agent.needs.thirst < 15:
-                rl_reward -= 3.0  # Acute hazard penalty for allowing vitals to drop
+                acute_hazard_reward = -3.0
+                rl_reward += acute_hazard_reward
                 
             # Outdoor cold penalty (learning to not loiter far outside at freezing night)
             if not getattr(agent, "_in_habitat", False) and temp < 40:
-                rl_reward -= 1.5
+                outdoor_cold_reward = -1.5
+                rl_reward += outdoor_cold_reward
                 
             colony_mats = {}
             for other in self.agents:
@@ -8575,7 +8585,17 @@ class SimulationEngine:
             next_state_key = self.decision_engine.get_rl_state_key(
                 agent, self.structures_built, colony_mats, rl_context
             )
-            self.decision_engine.apply_rl_reward(agent, rl_reward, next_state_key)
+            self.decision_engine.apply_rl_reward(
+                agent,
+                rl_reward,
+                next_state_key,
+                reason="colony progress and survival",
+                components={
+                    "colony_progress": progress_reward,
+                    "acute_hazard": acute_hazard_reward,
+                    "outdoor_cold": outdoor_cold_reward,
+                },
+            )
             agent._rl_transition_pending = False
             
         # RL Death Penalty (Agents learn from fatal mistakes across simulations)
@@ -10113,7 +10133,12 @@ class SimulationEngine:
             return False
         interval = self._live_state_interval_ticks()
         checkpoint_due = self.current_tick % self.CHECKPOINT_INTERVAL == 0
-        if not force and not checkpoint_due and self.current_tick % interval != 0:
+        if (
+            not getattr(self, "capture_every_tick", False)
+            and not force
+            and not checkpoint_due
+            and self.current_tick % interval != 0
+        ):
             return False
         self._on_tick(self.current_tick, self._get_state_snapshot())
         self._last_state_snapshot_tick = self.current_tick
@@ -16669,8 +16694,8 @@ class SimulationEngine:
             "planet_model_provenance": dict(
                 self.planet.data.get("epistemic_model", {})
             ),
-            # Backend contract only for now.  The frontend deliberately does
-            # not render the challenge wheel/civilian-arrival phase yet.
+            # Mission contract is available to public telemetry and the
+            # private ICARUS inspection view.
             "mission": {
                 **self._mission_state(),
                 "cargo_mass_ledger": self.cargo_mass_ledger,
@@ -16772,11 +16797,32 @@ class SimulationEngine:
                         else None
                     ),
                     "last_decision": dict(getattr(a, "last_decision", {})),
+                    "relationships": [
+                        {
+                            "agent_id": other.id,
+                            "name": other.name,
+                            "trust": round(a.trust_scores.get(other.id, 0.0), 3),
+                            "source": "simulation_social_graph",
+                            "opinion": None,
+                        }
+                        for other in self.agents
+                        if other.id != a.id
+                    ],
+                    "thoughts": [],
+                    "narrative_status": self.llm_client.get_status(),
                     "rl_policy": {
                         "total_reward": round(getattr(a, "total_accumulated_reward", 0.0), 1),
                         "state_key": getattr(a, "last_state_key", "nominal"),
                         "last_action": getattr(a, "last_action_key", "none"),
                         "learned_states": len(getattr(a, "q_table", {})),
+                        "reward_history": list(getattr(a, "rl_reward_history", [])),
+                        "current_q_values": dict(
+                            getattr(a, "q_table", {}).get(
+                                getattr(a, "last_state_key", None), {}
+                            )
+                        ),
+                        "epsilon": getattr(a, "rl_epsilon_explore", 0.0),
+                        "learning_rate": getattr(a, "rl_learning_rate", 0.0),
                     },
                 }
                 for a in self.agents
@@ -16814,6 +16860,7 @@ class SimulationEngine:
                     getattr(self, "_thermal_state", {})
                 ),
             },
+            "narrative_status": self.llm_client.get_status(),
             "llm_status": self.llm_client.get_status(),
         }
     
@@ -16924,6 +16971,7 @@ class SimulationEngine:
     def stop(self):
         if self.end_reason == "running":
             self.end_reason = "manual_stop"
+        self._stop_event.set()
         self.running = False
     
     def set_speed(self, multiplier: float):

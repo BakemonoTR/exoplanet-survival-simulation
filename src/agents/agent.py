@@ -1306,6 +1306,7 @@ class Agent:
         self.rl_planet_id: Optional[str] = None
         self.rl_policy_schema_reset: Optional[dict] = None
         self.total_accumulated_reward: float = 0.0
+        self.rl_reward_history: list[dict] = []
         self.rl_learning_rate: float = 0.20
         self.rl_discount_factor: float = 0.85
         self.rl_epsilon_explore: float = 0.12

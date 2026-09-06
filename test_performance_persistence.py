@@ -8,25 +8,23 @@ import time
 import unittest
 
 from src.api.database import SimulationDB
-from src.orchestration.llm_client import GroqLLMClient, LLMCallType
+from src.orchestration.llm_client import LocalNarrativeClient, LLMCallType
 
 
 class NonBlockingSocialLLMTest(unittest.TestCase):
     def test_social_network_wait_never_blocks_physics_caller(self):
-        client = GroqLLMClient(
-            api_keys=["test-key"],
-            request_timeout_s=0.25,
-            max_async_pending=2,
-        )
         worker_started = threading.Event()
         release_worker = threading.Event()
 
-        def slow_call(system, user, **kwargs):
-            worker_started.set()
-            release_worker.wait(timeout=1.0)
-            return {"dialogue": "ready", "_tokens_used": 7}
+        class SlowLocalProvider:
+            def generate(self, **_kwargs):
+                worker_started.set()
+                release_worker.wait(timeout=1.0)
+                return {"dialogue": "ready", "_tokens_used": 7}
 
-        client._try_api_call = slow_call
+        client = LocalNarrativeClient(
+            provider=SlowLocalProvider(), enabled=True, max_pending=2
+        )
         try:
             started = time.perf_counter()
             result = client.call(
@@ -46,13 +44,12 @@ class NonBlockingSocialLLMTest(unittest.TestCase):
                 call_type=LLMCallType.SOCIAL,
                 current_tick=25,
             )
-            status = client.get_status()["async_social"]
-            self.assertEqual(1, status["submitted"])
-            self.assertGreaterEqual(status["dropped"], 1)
+            status = client.get_status()
+            self.assertEqual(1, status["pending"])
 
             release_worker.set()
             deadline = time.time() + 1.0
-            while client.get_status()["async_social"]["pending"]:
+            while client.get_status()["pending"]:
                 self.assertLess(time.time(), deadline)
                 time.sleep(0.005)
 

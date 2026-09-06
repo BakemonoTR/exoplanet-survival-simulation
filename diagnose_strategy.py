@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 
-os.environ.setdefault("GROQ_API_KEY", "offline-strategy-diagnostic")
 
 from src.agents.agent import create_team_from_presets
 from src.memory import vector_store

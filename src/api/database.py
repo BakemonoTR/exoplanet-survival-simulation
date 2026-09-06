@@ -21,6 +21,7 @@ import os
 import time
 import logging
 import hashlib
+import zlib
 from typing import Optional
 from contextlib import contextmanager
 
@@ -169,6 +170,13 @@ class SimulationDB:
                 PRIMARY KEY (run_id, agent_id, updated_tick)
             );
 
+            CREATE TABLE IF NOT EXISTS tick_telemetry (
+                run_id INTEGER NOT NULL,
+                tick INTEGER NOT NULL,
+                payload BLOB NOT NULL,
+                PRIMARY KEY (run_id, tick)
+            );
+
             -- Indexes for common queries
             CREATE INDEX IF NOT EXISTS idx_snapshots_run_tick 
                 ON agent_snapshots(run_id, tick);
@@ -180,6 +188,8 @@ class SimulationDB:
                 ON agent_q_tables(agent_id, updated_tick);
             CREATE INDEX IF NOT EXISTS idx_qprogress_run_tick
                 ON agent_q_table_progress(run_id, updated_tick);
+            CREATE INDEX IF NOT EXISTS idx_tick_telemetry_run_tick
+                ON tick_telemetry(run_id, tick);
         """)
 
         # In-place migration for databases created before compact Q-policy
@@ -360,6 +370,8 @@ class SimulationDB:
             return True
         
         insert_templates = {
+            'tick_telemetry': """INSERT OR REPLACE INTO tick_telemetry
+                (run_id, tick, payload) VALUES (?, ?, ?)""",
             'agent_snapshots': """INSERT INTO agent_snapshots 
                 (run_id, tick, agent_id, agent_name, status, x, y,
                  hunger, thirst, energy, hygiene, o2_supply, temperature_stress,
@@ -641,24 +653,94 @@ class SimulationDB:
             logger.warning(f"Failed to load Q-table for {agent_id}: {e}")
         return None
 
-    def reset_rl_policies(self) -> dict[str, int]:
-        """Delete learned policies while preserving run/audit history."""
-        self._pending_q_tables.clear()
-        self._last_q_table_hashes.clear()
-        self._last_q_progress_tick.clear()
+    def discard_run_rl(self, run_id: int) -> dict[str, int]:
+        """Remove one attempt's policy rows so the prior policy is visible."""
+        return self._delete_rl_rows([int(run_id)])
+
+    def _delete_rl_rows(self, run_ids: Optional[list[int]]) -> dict[str, int]:
+        selected = set(run_ids) if run_ids is not None else None
+        for cache in (
+            self._pending_q_tables,
+            self._last_q_table_hashes,
+            self._last_q_progress_tick,
+        ):
+            for key in list(cache):
+                if selected is None or key[0] in selected:
+                    del cache[key]
+        if selected == set():
+            return {"policies_deleted": 0, "progress_rows_deleted": 0}
+        where = "" if selected is None else " WHERE run_id IN (%s)" % ",".join(
+            "?" for _ in selected
+        )
+        parameters = tuple(selected or ())
         with self._conn:
             policy_count = int(self._conn.execute(
-                "SELECT COUNT(*) FROM agent_q_tables"
+                "SELECT COUNT(*) FROM agent_q_tables" + where,
+                parameters,
             ).fetchone()[0])
             progress_count = int(self._conn.execute(
-                "SELECT COUNT(*) FROM agent_q_table_progress"
+                "SELECT COUNT(*) FROM agent_q_table_progress" + where,
+                parameters,
             ).fetchone()[0])
-            self._conn.execute("DELETE FROM agent_q_table_progress")
-            self._conn.execute("DELETE FROM agent_q_tables")
+            self._conn.execute(
+                "DELETE FROM agent_q_table_progress" + where, parameters
+            )
+            self._conn.execute("DELETE FROM agent_q_tables" + where, parameters)
         return {
             "policies_deleted": policy_count,
             "progress_rows_deleted": progress_count,
         }
+
+    def reset_rl_policies(self, planet_id: str = None) -> dict[str, int]:
+        """Delete one planet's policies while preserving audit history."""
+        run_ids = None if planet_id is None else [
+            int(row[0])
+            for row in self._conn.execute(
+                "SELECT id FROM simulation_runs WHERE planet=?", (planet_id,)
+            ).fetchall()
+        ]
+        return self._delete_rl_rows(run_ids)
+
+    def get_planet_rl_summary(self) -> dict:
+        rows = self._conn.execute(
+            """SELECT sr.planet, COUNT(qt.id), MAX(qt.updated_tick),
+                      MAX(qt.timestamp)
+               FROM agent_q_tables AS qt
+               JOIN simulation_runs AS sr ON sr.id=qt.run_id
+               GROUP BY sr.planet"""
+        ).fetchall()
+        return {
+            row[0]: {
+                "policy_snapshots": row[1],
+                "last_tick": row[2],
+                "updated_at": row[3],
+            }
+            for row in rows
+        }
+
+    def record_tick_telemetry(self, tick: int, payload: dict) -> None:
+        if self._current_run_id is None:
+            return
+        encoded = zlib.compress(
+            json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        )
+        self._pending_writes.append((
+            "tick_telemetry",
+            (self._current_run_id, int(tick), encoded),
+        ))
+
+    def get_tick_telemetry(
+        self, run_id: int, after_tick: int = -1, limit: int = 100,
+        latest: bool = False,
+    ) -> list[dict]:
+        order = "DESC" if latest else "ASC"
+        rows = self._conn.execute(
+            f"""SELECT payload FROM tick_telemetry
+                WHERE run_id=? AND tick>? ORDER BY tick {order} LIMIT ?""",
+            (int(run_id), int(after_tick), min(200, max(1, int(limit)))),
+        ).fetchall()
+        decoded = [json.loads(zlib.decompress(row[0])) for row in rows]
+        return list(reversed(decoded)) if latest else decoded
 
     def get_analytics_data(self, run_id: int = None) -> dict:
         """Fetch comprehensive telemetry and time-series for the Simulation Analytics tab."""
