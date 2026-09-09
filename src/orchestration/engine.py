@@ -167,6 +167,14 @@ class SimulationEngine:
         "water_collector",
         "isru_o2_unit",
     )
+    LIFE_SUPPORT_ENDPOINT_TYPES = frozenset({
+        "water_collector", "water_purifier", "greenhouse", "hydroponics",
+        "isru_o2_unit", "potable_water_tank", "oxygen_buffer_tank",
+        "habitat_module", "medical_station",
+    })
+    UTILITY_ROUTE_STRUCTURE_TYPES = LIFE_SUPPORT_ENDPOINT_TYPES | {
+        "life_support_distribution_grid",
+    }
     
     # Tactical LLM call triggers
     NEED_CRITICAL_THRESHOLD = 25.0
@@ -4012,7 +4020,12 @@ class SimulationEngine:
             reservation["status"] = "stranded"
             return
         site["materials_committed"] = True
-        site["construction_phase"] = "assembly"
+        site["construction_phase"] = (
+            "utility_trenching"
+            if site.get("utility_route_required", False)
+            and not site.get("utility_route_installed", False)
+            else "assembly"
+        )
         site["site_material_manifest"] = dict(reservation["delivered"])
         site["cargo_delivery_completed_tick"] = self.current_tick
         if self._on_event:
@@ -4350,10 +4363,12 @@ class SimulationEngine:
             and not structure.get("under_construction", False)
             and not structure.get("destroyed", False)
             and float(structure.get("health", 1.0)) > 0.0
-            and max(
-                abs(x - structure.get("x", -999)),
-                abs(y - structure.get("y", -999)),
-            ) <= 1
+            and (int(x), int(y)) in self._structure_footprint_cells(
+                str(structure.get("type", "structure")),
+                int(structure.get("x", 0)),
+                int(structure.get("y", 0)),
+                structure,
+            )
         ), None)
 
     def _is_pressurized_location(self, x: int, y: int) -> bool:
@@ -4663,15 +4678,84 @@ class SimulationEngine:
             agent.action.target = {**original, **target}
             agent.action.ticks_remaining = 1
 
+    def _cancel_sheltered_expedition_for_indoor_activity(
+        self, agent: Agent, reason: str
+    ) -> bool:
+        """Release a rover sortie when one occupant needs care before departure."""
+        expedition = getattr(agent, "_active_expedition", None)
+        if not isinstance(expedition, dict):
+            return False
+        member_ids = {
+            str(value) for value in (
+                expedition.get("lead_id"), expedition.get("buddy_id")
+            ) if value
+        }
+        if not member_ids:
+            member_ids = {agent.id}
+        members = [crew for crew in self.agents if crew.id in member_ids]
+        if len(members) != len(member_ids) or not all(
+            crew._in_habitat and self._is_pressurized_location(crew.x, crew.y)
+            for crew in members
+        ):
+            return False
+        expedition_id = str(expedition.get("id", ""))
+        if expedition.get("transport") == "crew_rover" and expedition_id:
+            rover = self.surface_fleet.crew_rover_for_expedition(expedition_id)
+            if rover is not None and rover.payload:
+                return False
+            self.surface_fleet.cancel_crew_rover_trip(expedition_id)
+        self.airlock.cancel_outbound(member_ids, self._colony_resources)
+        for member in members:
+            member._active_expedition = None
+            member._pending_expedition = None
+            if member is not agent:
+                member.action.clear()
+        agent._last_sheltered_expedition_cancel = {
+            "tick": self.current_tick, "reason": str(reason)
+        }
+        return True
+
     def _return_for_indoor_recovery(self, agent: Agent, reason: str) -> None:
         expedition = getattr(agent, "_active_expedition", None)
         if isinstance(expedition, dict):
             self.decision_engine._recall_expedition_team(agent)
         agent._pending_indoor_activity = None
+
+        return_x, return_y = self._lander_airlock_position()
+        if reason in {"sleep", "routine_recovery_requires_pressure"}:
+            # Sleeping beside a remote habitat is neither indoor recovery nor
+            # a reason to ignore that habitat and walk all the way to the
+            # lander. Route to the nearest commissioned crew pressure hull;
+            # the movement executor completes entry only on its real footprint.
+            quarters = [
+                structure
+                for structure in getattr(self, "placed_structures", [])
+                if structure.get("type") == "habitat_module"
+                and not structure.get("under_construction", False)
+                and not structure.get("destroyed", False)
+                and float(structure.get("health", 1.0)) > 0.0
+            ]
+            if quarters:
+                nearest = min(
+                    quarters,
+                    key=lambda structure: max(
+                        abs(agent.x - int(structure.get("x", return_x))),
+                        abs(agent.y - int(structure.get("y", return_y))),
+                    ),
+                )
+                habitat_x = int(nearest.get("x", return_x))
+                habitat_y = int(nearest.get("y", return_y))
+                if max(
+                    abs(agent.x - habitat_x), abs(agent.y - habitat_y)
+                ) < max(
+                    abs(agent.x - return_x), abs(agent.y - return_y)
+                ):
+                    return_x, return_y = habitat_x, habitat_y
+
         agent.action.action_type = "move"
         agent.action.target = {
-            "x": self._lander_airlock_position()[0],
-            "y": self._lander_airlock_position()[1],
+            "x": return_x,
+            "y": return_y,
             "destination": "shelter", "indoor_recovery_return": reason,
             "expedition": isinstance(expedition, dict),
         }
@@ -5527,6 +5611,143 @@ class SimulationEngine:
             int(structure.get("y", 0)),
         )
 
+    @staticmethod
+    def _utility_path_points(path) -> list[tuple[int, int]]:
+        """Normalize a serialized utility path and reject non-cardinal jumps."""
+        points: list[tuple[int, int]] = []
+        for point in path or []:
+            if isinstance(point, dict):
+                coordinate = (int(point.get("x", 0)), int(point.get("y", 0)))
+            elif isinstance(point, (list, tuple)) and len(point) >= 2:
+                coordinate = (int(point[0]), int(point[1]))
+            else:
+                return []
+            if points and coordinate == points[-1]:
+                continue
+            if points and (
+                abs(coordinate[0] - points[-1][0])
+                + abs(coordinate[1] - points[-1][1]) != 1
+            ):
+                return []
+            points.append(coordinate)
+        return points
+
+    def _plan_utility_construction_route(
+        self, recipe_name: str, structure_id: str, x: int, y: int
+    ) -> list[dict]:
+        """Freeze the trench that the field crew will physically install.
+
+        Consumer previews use the same finite router as commissioning. A new
+        vault is tied into the already installed spine, or into the lander ECLSS
+        interface for the first vault. This route is stored on the construction
+        site; later score queries are not allowed to invent a different pipe.
+        """
+        if recipe_name not in self.UTILITY_ROUTE_STRUCTURE_TYPES:
+            return []
+        start = (int(x), int(y))
+        current = self._life_support_network_snapshot()
+
+        if recipe_name in self.LIFE_SUPPORT_ENDPOINT_TYPES:
+            preview = self._life_support_network_snapshot(
+                proposed_structure={
+                    "id": str(structure_id),
+                    "type": str(recipe_name),
+                    "x": start[0],
+                    "y": start[1],
+                    "health": 1.0,
+                    "under_construction": False,
+                }
+            )
+            planned = next((
+                route.get("path", [])
+                for route in preview.get("routes", [])
+                if str(route.get("structure_id")) == str(structure_id)
+            ), [])
+            points = self._utility_path_points(planned)
+            if len(points) >= 2:
+                return [{"x": px, "y": py} for px, py in points]
+
+        goals = {
+            (int(node.get("x", 0)), int(node.get("y", 0)))
+            for node in current.get("nodes", [])
+        }
+        for existing_route in current.get("routes", []):
+            if existing_route.get("commissioned", True) is False:
+                continue
+            route_points = self._utility_path_points(
+                existing_route.get("path", [])
+            )
+            # A consumer's first point is its private service port, not a
+            # manifold for another machine. All buried corridor points after
+            # it are reusable. Vault tie-ins are themselves part of the spine.
+            if (
+                existing_route.get("structure_type")
+                == "life_support_distribution_grid"
+                or existing_route.get("route_role") == "vault_tie_in"
+            ):
+                goals.update(route_points)
+            else:
+                goals.update(route_points[1:])
+        if not goals:
+            # The lander datum lies inside its sealed 4 x 4 foundation. A
+            # buried line cannot reach that centre without crossing occupied
+            # pressure-shell cells, so use the surveyed exterior service apron
+            # as the first ECLSS tie-in. The first utility vault and any
+            # pre-grid endpoints then share one inspectable physical spine.
+            goals = {self._lander_airlock_exterior_position()}
+        # A site may legitimately be surveyed above an existing buried
+        # corridor. Treating its own coordinate as the goal produced a
+        # zero-segment path, which the construction contract correctly
+        # rejected forever. Force a local tap to a neighbouring spine parcel
+        # so there is real trench/pressure-test work for the crew to perform.
+        goals.discard(start)
+        if not goals:
+            return []
+
+        start_footprint = self._structure_footprint_cells(
+            recipe_name, start[0], start[1]
+        )
+        blocked: set[tuple[int, int]] = set(getattr(self, "spoil_piles", {}))
+        blocked.update(
+            coordinate for coordinate, depth in getattr(
+                self, "cell_excavation_depth", {}
+            ).items() if depth > 0
+        )
+        for structure in getattr(self, "placed_structures", []):
+            if structure.get("destroyed", False):
+                continue
+            blocked.update(self._structure_footprint_cells(
+                str(structure.get("type", "structure")),
+                int(structure.get("x", 0)),
+                int(structure.get("y", 0)),
+                structure,
+            ))
+        route = self._route_utility_trench(
+            start, goals, blocked - start_footprint, start_footprint
+        )
+        return [{"x": px, "y": py} for px, py in route]
+
+    def _construction_workfront(self, site: dict) -> tuple[int, int]:
+        """Return the exact parcel where the next construction tick occurs."""
+        default = (int(site.get("x", 0)), int(site.get("y", 0)))
+        if (
+            not site.get("utility_route_required", False)
+            or site.get("utility_route_installed", False)
+        ):
+            return default
+        path = self._utility_path_points(site.get("utility_route_plan", []))
+        segment_count = max(0, len(path) - 1)
+        if segment_count <= 0:
+            return default
+        completed = max(0, min(
+            segment_count - 1,
+            int(site.get("utility_route_segments_completed", 0)),
+        ))
+        # Work at the source parcel installs the following 100 m segment. The
+        # final tap is made from the last exterior parcel, so nobody walks
+        # through an occupied pressure shell or utility-vault foundation.
+        return path[completed]
+
     def _route_utility_trench(
         self,
         start: tuple[int, int],
@@ -5832,6 +6053,13 @@ class SimulationEngine:
                 **proposed_structure,
                 "_utility_pending": True,
             })
+        construction_route_sites = [
+            structure
+            for structure in getattr(self, "placed_structures", [])
+            if structure.get("under_construction", False)
+            and structure.get("utility_route_required", False)
+            and not structure.get("destroyed", False)
+        ]
         signature = (
             powered,
             tuple(sorted(
@@ -5841,8 +6069,23 @@ class SimulationEngine:
                     int(structure.get("x", 0)),
                     int(structure.get("y", 0)),
                     round(float(structure.get("health", 1.0)), 4),
+                    bool(structure.get("utility_route_required", False)),
+                    bool(structure.get("utility_route_installed", False)),
+                    tuple(self._utility_path_points(
+                        structure.get("utility_route_plan", [])
+                    )),
                 )
                 for structure in structures
+            )),
+            tuple(sorted(
+                (
+                    self._life_support_structure_key(structure),
+                    int(structure.get("utility_route_segments_completed", 0)),
+                    tuple(self._utility_path_points(
+                        structure.get("utility_route_plan", [])
+                    )),
+                )
+                for structure in construction_route_sites
             )),
             tuple(sorted(
                 (int(x), int(y))
@@ -5873,6 +6116,11 @@ class SimulationEngine:
         nodes = [
             structure for structure in structures
             if structure.get("type") == "life_support_distribution_grid"
+            and (
+                not structure.get("utility_route_required", False)
+                or structure.get("utility_route_installed", False)
+                or structure.get("_utility_pending", False)
+            )
         ]
         effects = (
             (self._get_recipe("life_support_distribution_grid") or {})
@@ -5894,6 +6142,45 @@ class SimulationEngine:
             for node in nodes
         }
         network_cells = set(node_cells)
+        unique_edges: set[
+            tuple[tuple[int, int], tuple[int, int]]
+        ] = set()
+        routes = []
+        # A newly built vault first installs a real tie-in. Its remaining
+        # certified line stock is deployed as consumer branches later, but the
+        # commissioned tie-in itself is persistent topology and consumes line.
+        for node in nodes:
+            if not node.get("utility_route_installed", False):
+                continue
+            path = self._utility_path_points(node.get("utility_route_plan", []))
+            if len(path) < 2:
+                continue
+            route_edges = {
+                tuple(sorted((first, second)))
+                for first, second in zip(path, path[1:])
+            }
+            unique_edges.update(route_edges)
+            network_cells.update(path)
+            routes.append({
+                "structure_id": self._life_support_structure_key(node),
+                "structure_type": "life_support_distribution_grid",
+                "path": [{"x": px, "y": py} for px, py in path],
+                "length_m": round(
+                    max(0, len(path) - 1) * grid_cell_m, 1
+                ),
+                "new_installed_length_m": round(
+                    len(route_edges) * grid_cell_m, 1
+                ),
+                "buried": True,
+                "commissioned": True,
+                "commissioned_tick": int(node.get(
+                    "utility_route_completed_tick",
+                    node.get("commissioned_tick", node.get("completed_tick", 0)),
+                ) or 0),
+                "flow_enabled": powered,
+                "route_role": "vault_tie_in",
+                "installation_verified": True,
+            })
         blocked: set[tuple[int, int]] = set(getattr(self, "spoil_piles", {}))
         blocked.update(
             coord for coord, depth in getattr(
@@ -5945,10 +6232,6 @@ class SimulationEngine:
             self._life_support_structure_key(structure),
         ))
 
-        unique_edges: set[
-            tuple[tuple[int, int], tuple[int, int]]
-        ] = set()
-        routes = []
         endpoints = []
         physically_connected = {
             self._life_support_structure_key(node) for node in nodes
@@ -5960,6 +6243,19 @@ class SimulationEngine:
                 int(structure.get("x", 0)),
                 int(structure.get("y", 0)),
             )
+            if (
+                structure.get("utility_route_required", False)
+                and not structure.get("utility_route_installed", False)
+                and not structure.get("_utility_pending", False)
+            ):
+                endpoints.append({
+                    "structure_id": key,
+                    "structure_type": structure.get("type"),
+                    "x": start[0], "y": start[1],
+                    "connected": False, "physically_connected": False,
+                    "reason": "utility_route_installation_incomplete",
+                })
+                continue
             nearest_node_distance = min((
                 max(abs(start[0] - nx), abs(start[1] - ny))
                 for nx, ny in node_cells
@@ -5995,11 +6291,37 @@ class SimulationEngine:
                 str(structure.get("type", "structure")),
                 start[0], start[1], structure,
             )
-            route = self._route_utility_trench(
-                start,
-                network_cells,
-                blocked - start_footprint,
-                start_footprint,
+            requires_installed_path = bool(
+                structure.get("utility_route_required", False)
+                and structure.get("utility_route_installed", False)
+                and not structure.get("_utility_pending", False)
+            )
+            installed_path = []
+            if requires_installed_path:
+                installed_path = self._utility_path_points(
+                    structure.get("utility_route_plan", [])
+                )
+                route_attached = bool(
+                    installed_path
+                    and installed_path[0] == start
+                    and installed_path[-1] in network_cells
+                )
+                if not route_attached:
+                    endpoints.append({
+                        "structure_id": key,
+                        "structure_type": structure.get("type"),
+                        "x": start[0], "y": start[1],
+                        "connected": False, "physically_connected": False,
+                        "reason": "installed_utility_route_disconnected",
+                    })
+                    continue
+            route = installed_path if requires_installed_path else (
+                self._route_utility_trench(
+                    start,
+                    network_cells,
+                    blocked - start_footprint,
+                    start_footprint,
+                )
             )
             if not route:
                 endpoints.append({
@@ -6057,6 +6379,7 @@ class SimulationEngine:
                     ), default=0),
                 ),
                 "flow_enabled": powered,
+                "installation_verified": bool(installed_path),
             })
             endpoints.append({
                 "structure_id": key,
@@ -6076,9 +6399,25 @@ class SimulationEngine:
                 "x2": second[0], "y2": second[1],
                 "length_m": round(grid_cell_m, 1),
                 "buried": True,
+                "commissioned": True,
             }
             for first, second in sorted(unique_edges)
         ]
+        construction_segments = []
+        for site in construction_route_sites:
+            path = self._utility_path_points(site.get("utility_route_plan", []))
+            completed = max(0, min(
+                len(path) - 1,
+                int(site.get("utility_route_segments_completed", 0)),
+            ))
+            construction_segments.extend({
+                "x1": first[0], "y1": first[1],
+                "x2": second[0], "y2": second[1],
+                "length_m": round(grid_cell_m, 1),
+                "buried": False,
+                "commissioned": False,
+                "construction_site_id": self._life_support_structure_key(site),
+            } for first, second in zip(path[:completed], path[1:completed + 1]))
         snapshot = {
             "powered": powered,
             "transfer_enabled": bool(powered and nodes),
@@ -6112,6 +6451,7 @@ class SimulationEngine:
             ],
             "routes": routes,
             "segments": segments,
+            "construction_segments": construction_segments,
             "endpoints": endpoints,
             "physically_connected_structure_ids": sorted(
                 physically_connected
@@ -6266,8 +6606,19 @@ class SimulationEngine:
     def _capacity_with_health(
         structures: list[dict], contribution_per_structure: float
     ) -> float:
+        # Integrity is a serviceability margin, not a continuously variable
+        # throttle. Tiny micrometeoroid or weather wear does not make a rated
+        # oxygen plant, habitat berth or greenhouse produce 1% less every day.
+        # Assets retain nameplate capacity down to 90% integrity, then derate
+        # continuously to zero. Dust, power, water and crop-service limits are
+        # accounted independently by their own physical systems.
+        serviceability_threshold = 0.90
         return sum(
-            max(0.0, min(1.0, float(structure.get("health", 1.0))))
+            min(
+                1.0,
+                max(0.0, float(structure.get("health", 1.0)))
+                / serviceability_threshold,
+            )
             * float(contribution_per_structure)
             for structure in structures
         )
@@ -7741,12 +8092,61 @@ class SimulationEngine:
             return True
         lead = next(crew for crew in team if crew.id == state["lead_id"])
         master = lead._active_expedition
+        if (
+            target.get("utility_route_workfront", False)
+            and master.get("status") == "working"
+        ):
+            # The rover remains parked at the structure while both occupants
+            # walk the surveyed trench. Let the ordinary cardinal MOVE motor
+            # execute these short site movements; treating every trench parcel
+            # as a new rover destination pinned them at the structure centre.
+            return False
         returning = target.get("destination") in {"habitat", "shelter"} or any(
             crew._active_expedition.get("status") == "returning" for crew in team
         )
         if returning:
             for crew in team:
                 crew._active_expedition["status"] = "returning"
+            rover = self.surface_fleet.crew_rover_for_expedition(
+                str(master.get("id", ""))
+            )
+            rover_site = (
+                (int(rover.x), int(rover.y))
+                if rover is not None and rover.state == "in_use"
+                else tuple(master["route"][-1])
+            )
+            if (
+                int(master.get("route_index", len(master["route"]) - 1))
+                == len(master["route"]) - 1
+                and any((crew.x, crew.y) != rover_site for crew in team)
+            ):
+                # A fatigue or weather recall can occur midway along a trench.
+                # Walk back to the parked vehicle before following its recorded
+                # return route; otherwise route_index=end would teleport the
+                # pair from the workfront onto the rover.
+                # Each astronaut walks their own final metres. Moving the pair
+                # from the lead's turn let the buddy's later self-care route
+                # undo that coordinate update, permanently splitting the team.
+                # It also moved a resting passenger without a physical action.
+                moving = (agent.x, agent.y) != rover_site
+                if moving:
+                    dx, dy = self._cardinal_step_toward(
+                        agent, rover_site[0], rover_site[1], 1
+                    )
+                    agent.x += dx
+                    agent.y += dy
+                    agent._in_habitat = False
+                agent.action.action_type = "move" if moving else "stand_watch"
+                agent.action.target = {
+                    "x": rover_site[0],
+                    "y": rover_site[1],
+                    "destination": "construction_rover_rendezvous",
+                    "expedition": True,
+                    "transport": "on_foot",
+                    "struct_id": master["site_id"],
+                }
+                agent.action.ticks_remaining = 1
+                return True
         if master.get("last_movement_tick") == self.current_tick:
             return True
         master["last_movement_tick"] = self.current_tick
@@ -8947,11 +9347,20 @@ class SimulationEngine:
                     struct["progress"] = 0.0
                     continue
                 sx, sy = struct.get("x", 1000), struct.get("y", 1000)
+                work_x, work_y = self._construction_workfront(struct)
+                utility_route_pending = bool(
+                    struct.get("utility_route_required", False)
+                    and not struct.get("utility_route_installed", False)
+                )
                 assisting_builders = [
                     a for a in self.agents
                     if getattr(a.status, 'value', str(a.status)) != 'dead'
                     and getattr(a.action, 'action_type', '') == 'build'
-                    and max(abs(a.x - sx), abs(a.y - sy)) <= 1
+                    and (
+                        (a.x, a.y) == (work_x, work_y)
+                        if utility_route_pending
+                        else max(abs(a.x - sx), abs(a.y - sy)) <= 1
+                    )
                     and (
                         not isinstance(getattr(a.action, "target", None), dict)
                         or a.action.target.get("struct_id") in (None, struct.get("id"))
@@ -9041,12 +9450,108 @@ class SimulationEngine:
                 struct["assembly_robot_equivalent_workers"] = float(
                     robot_assist.get("equivalent_workers", 0.0)
                 )
+                if utility_route_pending:
+                    route_hours = max(
+                        0.1, float(struct.get("utility_route_work_hours", 0.1))
+                    )
+                    route_hours_completed = min(
+                        route_hours,
+                        float(struct.get(
+                            "utility_route_work_hours_completed", 0.0
+                        )) + work_this_tick,
+                    )
+                    struct["utility_route_work_hours_completed"] = (
+                        route_hours_completed
+                    )
+                    total_segments = max(
+                        0, int(struct.get("utility_route_total_segments", 0))
+                    )
+                    completed_segments = max(0, min(
+                        total_segments,
+                        int(struct.get("utility_route_segments_completed", 0)),
+                    ))
+                    if total_segments <= 0:
+                        next_completed_segments = 0
+                    else:
+                        hours_per_segment = route_hours / total_segments
+                        earned_segments = min(
+                            total_segments,
+                            int(math.floor(
+                                (route_hours_completed + 1e-9)
+                                / hours_per_segment
+                            )),
+                        )
+                        # One visited work parcel can complete at most its next
+                        # physical segment in a tick, even if several supervised
+                        # assembly robots create a labor surplus.
+                        next_completed_segments = min(
+                            earned_segments, completed_segments + 1
+                        )
+                    if next_completed_segments > completed_segments:
+                        struct["utility_route_segments_completed"] = (
+                            next_completed_segments
+                        )
+                        if self._on_event:
+                            self._on_event({
+                                "type": "utility_route_segment_installed",
+                                "agent": assisting_builders[0].name,
+                                "cause": (
+                                    f"Installed utility segment "
+                                    f"{next_completed_segments}/{total_segments} "
+                                    f"for {struct.get('type', 'structure').replace('_', ' ').title()}"
+                                ),
+                                "site_id": struct.get("id"),
+                                "segment": next_completed_segments,
+                                "segments_total": total_segments,
+                                "x": work_x,
+                                "y": work_y,
+                                "tick": self.current_tick,
+                            })
+                    if next_completed_segments >= total_segments:
+                        struct["utility_route_installed"] = True
+                        struct["utility_route_completed_tick"] = self.current_tick
+                        struct["construction_phase"] = "assembly"
+                        if self._on_event:
+                            self._on_event({
+                                "type": "utility_route_installed",
+                                "agent": assisting_builders[0].name,
+                                "cause": (
+                                    f"Pressure-tested and buried the physical "
+                                    f"utility route for {struct.get('type', 'structure').replace('_', ' ').title()}"
+                                ),
+                                "site_id": struct.get("id"),
+                                "segments_total": total_segments,
+                                "tick": self.current_tick,
+                            })
+                    else:
+                        struct["construction_phase"] = "utility_trenching"
+                    # Force a fresh workfront decision next tick. Long BUILD
+                    # actions previously left the crew at the first parcel
+                    # while the invisible route advanced elsewhere.
+                    for builder in assisting_builders:
+                        builder.action.ticks_remaining = min(
+                            1, max(0, builder.action.ticks_remaining)
+                        )
                 struct["progress"] = min(1.0, completed_hours / required_hours)
                 remaining_hours = max(0.0, required_hours - completed_hours)
                 current_rate = max(0.01, work_this_tick / self.SIM_HOURS_PER_TICK)
                 struct["ticks_remaining"] = math.ceil(
                     remaining_hours / (current_rate * self.SIM_HOURS_PER_TICK)
                 )
+                if (
+                    struct.get("utility_route_required", False)
+                    and not struct.get("utility_route_installed", False)
+                ):
+                    struct["progress"] = min(0.999, struct["progress"])
+                    struct["ticks_remaining"] = max(
+                        1,
+                        struct["ticks_remaining"],
+                        int(struct.get("utility_route_total_segments", 0))
+                        - int(struct.get(
+                            "utility_route_segments_completed", 0
+                        )),
+                    )
+                    continue
                 if completed_hours >= required_hours:
                     acceptance = self._construction_acceptance_record(
                         struct,
@@ -10594,7 +11099,9 @@ class SimulationEngine:
             agent.action.action_type in {"sleep", "service_suit", "wash"}
             and not self._is_crew_quarters_location(agent)
         ):
-            self._return_for_indoor_recovery(agent, "routine_recovery_requires_pressure")
+            self._return_for_indoor_recovery(
+                agent, str(agent.action.action_type)
+            )
         medical_rest_oral_hydration = (
             self._oral_hydration_during_medical_rest(agent)
         )
@@ -11672,6 +12179,18 @@ class SimulationEngine:
                 # outcome. Do not teach the policy from an executor race.
                 agent._rl_transition_pending = False
             
+            if (
+                action in {"sleep", "service_suit", "wash"}
+                and self._is_crew_quarters_location(agent)
+                and isinstance(getattr(agent, "_active_expedition", None), dict)
+                and self._cancel_sheltered_expedition_for_indoor_activity(
+                    agent, action
+                )
+            ):
+                # Personal recovery invalidates a departure that has not yet
+                # left its pressure hull. This prevents a later teammate turn
+                # from moving the recovering occupant outside in the same tick.
+                decision["deterministic"] = True
             if (
                 action in {"sleep", "service_suit", "wash"}
                 and not self._is_crew_quarters_location(agent)
@@ -13519,15 +14038,23 @@ class SimulationEngine:
                                 ),
                             }
                             return agent_events
-                        site_x = int(active_site.get("x", agent.x))
-                        site_y = int(active_site.get("y", agent.y))
+                        site_x, site_y = self._construction_workfront(
+                            active_site
+                        )
+                        utility_workfront = bool(
+                            active_site.get("utility_route_required", False)
+                            and not active_site.get(
+                                "utility_route_installed", False
+                            )
+                        )
                         if (
                             not isinstance(getattr(agent, "_active_expedition", None), dict)
                             and self._start_construction_rover_trip(agent, active_site)
                         ):
                             return agent_events
                         distance_to_site = max(abs(agent.x - site_x), abs(agent.y - site_y))
-                        if distance_to_site > 1:
+                        workfront_tolerance = 0 if utility_workfront else 1
+                        if distance_to_site > workfront_tolerance:
                             dx, dy = self._cardinal_step_toward(
                                 agent, site_x, site_y, 1
                             )
@@ -13550,22 +14077,37 @@ class SimulationEngine:
                                 "y": site_y,
                                 "destination": "construction_site",
                                 "construction_route": True,
+                                "utility_route_workfront": utility_workfront,
+                                "expedition": bool(
+                                    utility_workfront
+                                    and isinstance(getattr(
+                                        agent, "_active_expedition", None
+                                    ), dict)
+                                ),
+                                "transport": (
+                                    "on_foot" if utility_workfront else None
+                                ),
                             }
                             return agent_events
                         if not prepare_build_eva(site_x, site_y):
                             return agent_events
                         agent.action.action_type = "build"
                         agent.action.ticks_remaining = (
-                            1 if isinstance(getattr(agent, "_active_expedition", None), dict)
+                            1 if utility_workfront
+                            or isinstance(getattr(agent, "_active_expedition", None), dict)
                             and agent._active_expedition.get("kind") == "construction_support"
                             else max(1, int(active_site.get("ticks_remaining", 1)))
                         )
                         agent.action.target = {
                             "recipe": recipe_name,
                             "struct_id": active_site.get("id"),
-                            "x": active_site.get("x"),
-                            "y": active_site.get("y"),
+                            "x": site_x,
+                            "y": site_y,
                             "assisting": True,
+                            "utility_route_workfront": utility_workfront,
+                            "utility_route_segment": int(active_site.get(
+                                "utility_route_segments_completed", 0
+                            )),
                         }
                         return agent_events
 
@@ -13660,6 +14202,28 @@ class SimulationEngine:
                     req_mats = recipe.get("materials", {})
                     required_item = recipe.get("requires_item")
                     struct_id = f"struct_{len(self.placed_structures)+1}"
+                    utility_route_required = (
+                        recipe_name in self.UTILITY_ROUTE_STRUCTURE_TYPES
+                    )
+                    utility_route_plan = self._plan_utility_construction_route(
+                        recipe_name, struct_id, place_x, place_y
+                    )
+                    if (
+                        utility_route_required
+                        and len(self._utility_path_points(utility_route_plan)) < 2
+                    ):
+                        self.decision_engine.mark_capacity_site_unavailable(
+                            recipe_name
+                        )
+                        agent.action.action_type = "build_blocked"
+                        agent.action.target = {
+                            "recipe": recipe_name,
+                            "reason": "no_physical_utility_route",
+                            "x": place_x,
+                            "y": place_y,
+                        }
+                        agent.action.ticks_remaining = 1
+                        return agent_events
                     cargo_reservation = self._reserve_construction_cargo(
                         site_id=struct_id,
                         recipe_name=recipe_name,
@@ -13690,6 +14254,17 @@ class SimulationEngine:
                         build_ticks = max(1, math.ceil(
                             required_work_hours / self.SIM_HOURS_PER_TICK
                         ))
+                        utility_segment_count = max(
+                            0,
+                            len(self._utility_path_points(utility_route_plan)) - 1,
+                        )
+                        utility_route_work_hours = (
+                            min(
+                                required_work_hours * 0.40,
+                                max(4.0, utility_segment_count * 2.0),
+                            )
+                            if utility_route_required else 0.0
+                        )
                         self.placed_structures.append({
                             "id": struct_id,
                             "type": recipe_name,
@@ -13738,6 +14313,13 @@ class SimulationEngine:
                             "recommended_crew": int(construction.get("recommended_crew", 2)),
                             "active_builder_count": 1,
                             "dust_fouling_level": 0.0,
+                            "utility_route_required": utility_route_required,
+                            "utility_route_installed": not utility_route_required,
+                            "utility_route_plan": utility_route_plan,
+                            "utility_route_total_segments": utility_segment_count,
+                            "utility_route_segments_completed": 0,
+                            "utility_route_work_hours": utility_route_work_hours,
+                            "utility_route_work_hours_completed": 0.0,
                         })
                         
                         # Building wears the best available tool three times as
@@ -14059,20 +14641,28 @@ class SimulationEngine:
                         "tick": self.current_tick
                     })
             elif action == "wash":
-                wash_result = agent.wash()
-                if not wash_result.get("washed") and agent._in_habitat:
-                    depot = getattr(self, "central_depot_inventory", {})
-                    if depot.get("water_packs", 0) >= 2:
-                        depot["water_packs"] -= 2
-                        agent.needs.hygiene = min(90.0, agent.needs.hygiene + 50.0)
-                        wash_result = {"washed": True, "water_used": 2.0}
-                    elif self._colony_resources.get("water_reserve_l", 0.0) >= 2.0:
-                        self._colony_resources["water_reserve_l"] -= 2.0
-                        agent.needs.hygiene = min(90.0, agent.needs.hygiene + 50.0)
-                        wash_result = {"washed": True, "water_used": 2.0}
-                agent.action.action_type = "wash" if wash_result.get("washed") else "idle"
-                agent.action.target = {**dict(target), **dict(wash_result)}
-                agent.action.ticks_remaining = 2
+                # Recheck the pressure hull at the point of effect.  An
+                # outbound airlock/rover update can move a crew member after
+                # the policy passed the earlier indoor-action gate in this
+                # same tick.  Water and hygiene benefit must never be applied
+                # from that stale pre-cycle location.
+                if not self._is_crew_quarters_location(agent):
+                    self._return_for_indoor_recovery(agent, "wash")
+                else:
+                    wash_result = agent.wash()
+                    if not wash_result.get("washed") and agent._in_habitat:
+                        depot = getattr(self, "central_depot_inventory", {})
+                        if depot.get("water_packs", 0) >= 2:
+                            depot["water_packs"] -= 2
+                            agent.needs.hygiene = min(90.0, agent.needs.hygiene + 50.0)
+                            wash_result = {"washed": True, "water_used": 2.0}
+                        elif self._colony_resources.get("water_reserve_l", 0.0) >= 2.0:
+                            self._colony_resources["water_reserve_l"] -= 2.0
+                            agent.needs.hygiene = min(90.0, agent.needs.hygiene + 50.0)
+                            wash_result = {"washed": True, "water_used": 2.0}
+                    agent.action.action_type = "wash" if wash_result.get("washed") else "idle"
+                    agent.action.target = {**dict(target), **dict(wash_result)}
+                    agent.action.ticks_remaining = 2
             elif action == "repair":
                 struct_name = target.get("structure", target.get("recipe", ""))
                 inspection_only = bool(target.get("inspection_only", False))
@@ -14406,6 +14996,8 @@ class SimulationEngine:
                             isinstance(active_expedition, dict)
                             and active_expedition.get("transport")
                             == "crew_rover"
+                            and target.get("transport") != "on_foot"
+                            and not target.get("utility_route_workfront", False)
                         )
                         crew_speed = (
                             1.0 if in_rover else agent.movement_speed(
@@ -14576,6 +15168,8 @@ class SimulationEngine:
                         isinstance(active_expedition, dict)
                         and active_expedition.get("transport") == "crew_rover"
                         and active_expedition.get("role") == "lead"
+                        and target.get("transport") != "on_foot"
+                        and not target.get("utility_route_workfront", False)
                     ):
                         self.surface_fleet.record_crew_rover_movement(
                             str(active_expedition.get("id")),

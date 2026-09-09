@@ -75,6 +75,46 @@ class AirlockController:
         stores["airlock_reserved_o2_kg"] = sum(v["o2"] for v in self.return_reserves.values())
         return True
 
+    def cancel_outbound(self, crew_ids, stores):
+        """Cancel a sheltered departure and release its unused return reserve."""
+        ids = tuple(sorted(set(crew_ids)))
+        if not ids:
+            return False
+        key = (ids, "out")
+        changed = False
+        before = len(self.queue)
+        self.queue = [entry for entry in self.queue if entry.get("key") != key]
+        changed = len(self.queue) != before
+        if self.active and self.active.get("key") == key:
+            self.active = None
+            changed = True
+        if key in self.permits:
+            self.permits.pop(key, None)
+            changed = True
+        refunded_energy = 0.0
+        refunded_o2 = 0.0
+        for crew_id in ids:
+            reserve = self.return_reserves.pop(crew_id, None)
+            if reserve:
+                refunded_energy += float(reserve.get("energy", 0.0))
+                refunded_o2 += float(reserve.get("o2", 0.0))
+                changed = True
+        stores["energy_stored_kwh"] = (
+            float(stores.get("energy_stored_kwh", 0.0)) + refunded_energy
+        )
+        stores["o2_reserve_kg"] = (
+            float(stores.get("o2_reserve_kg", 0.0)) + refunded_o2
+        )
+        stores["airlock_reserved_energy_kwh"] = sum(
+            float(value.get("energy", 0.0))
+            for value in self.return_reserves.values()
+        )
+        stores["airlock_reserved_o2_kg"] = sum(
+            float(value.get("o2", 0.0))
+            for value in self.return_reserves.values()
+        )
+        return changed
+
     def request(self, crew_ids, direction, tick, charge=lambda: True):
         self.blocked_reason = None
         ids = tuple(sorted(set(crew_ids)))

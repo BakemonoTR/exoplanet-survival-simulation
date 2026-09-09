@@ -176,10 +176,11 @@
           "service_radius_cells": 12,
           "installed_line_length_m": 4500,
           "installed_corridor_length_m": 4500,
-          "installed_tube_length_m": 13500,
-          "tube_length_per_metal_pipe_unit_m": 10,
-          "max_connected_endpoints": 16,
-          "isolated_fluid_circuits": 3,
+                        "installed_tube_length_m": 13500,
+                        "tube_length_per_metal_pipe_unit_m": 10,
+                        "max_connected_endpoints": 16,
+                        "planned_campus_vaults": 5,
+                        "isolated_fluid_circuits": 3,
           "power_consumption_w": 5000
         }
       },
@@ -324,7 +325,7 @@
     "water_collector": {
       "tier": 1,
       "display_name": "Dual-Mode Water Extraction Plant",
-      "description": "A roughly 330 kg, 200 L/day skid using an atmospheric cold-trap on humid planets or a heated icy-regolith dryer beside a verified ice face.",
+      "description": "A roughly 330 kg, 200 L/day skid using an atmospheric cold-trap on humid planets or a heated icy-regolith dryer beside a verified ice face. Its integral particulate/volatile removal and quality sensors condition extracted makeup water before it enters potable storage; the separate wastewater unit recovers used water rather than multiplying extraction.",
       "materials": {
         "pump_compressor_module": 1,
         "thermal_control_loop": 1,
@@ -359,6 +360,7 @@
           "power_consumption_w": 5000,
           "requires_water_source": true,
           "extraction_modes": ["atmospheric_cold_trap", "icy_regolith_dryer"],
+          "delivers_conditioned_makeup_water": true,
           "minimum_atmospheric_h2o_fraction": 0.001,
           "requires_ice_proximity_for_icy_regolith_mode": true,
           "storage_capacity_liters": 250

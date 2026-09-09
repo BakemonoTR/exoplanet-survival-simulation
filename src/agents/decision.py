@@ -1235,6 +1235,9 @@ class DecisionEngine:
             endpoints_per_vault = max(
                 1, int(effects.get("max_connected_endpoints", 1))
             )
+            planned_campus_vaults = max(
+                0, int(effects.get("planned_campus_vaults", 0))
+            )
             routed_assets = (
                 "potable_water_tank", "oxygen_buffer_tank",
                 "isru_o2_unit", "water_collector", "water_purifier",
@@ -1270,6 +1273,7 @@ class DecisionEngine:
             installed_nodes = len(network.get("nodes", []))
             return max(
                 port_based_count,
+                planned_campus_vaults,
                 installed_nodes + 1 if needs_extension else 0,
             )
         if recipe_name == "power_distribution_grid":
@@ -1775,14 +1779,97 @@ class DecisionEngine:
                 and crew.needs.energy >= 25.0
                 and crew.needs.o2_supply >= 15.0
             ]
+            recommended_crew = max(
+                1, int(recipe.get("construction", {}).get(
+                    "recommended_crew", 1
+                ))
+            )
+            productive_crew = max(
+                1, min(len(living_fit), recommended_crew)
+            )
             minimum_completion_ticks = int(math.ceil(
                 max(1.0, float(recipe.get("base_duration_ticks", 1.0)))
-                / max(1, len(living_fit))
+                / productive_crew
             ))
+            # Base duration covers productive installation work. A credible
+            # mission plan must also reserve time for fabrication, transporter
+            # staging, crew recovery and hand-offs. Until this planet has a
+            # measured delivery sample, use one equal logistics allowance;
+            # later attempts and later modules use their real observed latency.
+            planning_completion_ticks = minimum_completion_ticks * 2
+            policy_for_schedule = getattr(self, "strategic_policy", None)
+            if policy_for_schedule is not None and hasattr(
+                policy_for_schedule, "expected_completion_ticks"
+            ):
+                planning_completion_ticks = (
+                    policy_for_schedule.expected_completion_ticks(
+                        candidate["recipe"], planning_completion_ticks
+                    )
+                )
+            now_tick = int(
+                getattr(self, "current_tick", 0) if tick is None else tick
+            )
+            required_count = max(1, int(candidate["required_count"]))
+            installed_count = max(
+                0, int(structures_built.get(candidate["recipe"], 0))
+            )
+            remaining_modules = max(0, required_count - installed_count)
+            maturity_ticks = 0
+            if candidate["recipe"] == "greenhouse":
+                effects = recipe.get("output", {}).get("effects", {})
+                maturity_ticks = int(effects.get("growth_cycle_ticks", 0) or 0)
+                if maturity_ticks <= 0:
+                    maturity_ticks = ticks_for_minutes(
+                        float(effects.get("first_harvest_days", 28.0)) * 1440.0,
+                        self.tick_minutes,
+                    )
+            infrastructure_ticks_remaining = max(
+                0, int(self.infrastructure_deadline_tick) - now_tick
+            )
+            # The acceptance clock stops at day 330, not at the end of the
+            # 30-day soak.  A greenhouse also has to complete one real crop
+            # cycle before it contributes food.  This forecast does not grant
+            # progress or prescribe a build order; it tells the strategic
+            # policy when an unfinished category is approaching its last
+            # credible start window.
+            category_lead_ticks = (
+                remaining_modules * planning_completion_ticks + maturity_ticks
+            )
+            schedule_uncertainty_ticks = max(
+                ticks_for_minutes(7.0 * 1440.0, self.tick_minutes),
+                int(math.ceil(category_lead_ticks * 0.20)),
+            )
+            acceptance_slack_ticks = (
+                infrastructure_ticks_remaining - category_lead_ticks
+            )
+            candidate.update({
+                "remaining_required_modules": remaining_modules,
+                "acceptance_maturity_ticks": maturity_ticks,
+                "acceptance_category_lead_ticks": category_lead_ticks,
+                "acceptance_deadline_ticks_remaining": (
+                    infrastructure_ticks_remaining
+                ),
+                "acceptance_deadline_slack_ticks": acceptance_slack_ticks,
+                "acceptance_deadline_priority": bool(
+                    remaining_modules > 0
+                    and acceptance_slack_ticks <= schedule_uncertainty_ticks
+                ),
+                # Preserve the broad learned exploration envelope early in the
+                # mission. During the final 120 days before acceptance, compare
+                # the actual next module and permit only one normalized module
+                # of headroom. The policy still chooses among all categories
+                # inside that physical envelope.
+                "balance_headroom_modules": (
+                    None
+                    if infrastructure_ticks_remaining
+                    > ticks_for_minutes(120.0 * 1440.0, self.tick_minutes)
+                    else 1
+                ),
+            })
             max_ticks = self.mission_attempt_max_ticks
             ticks_remaining = (
                 max(0, int(max_ticks) - int(
-                    getattr(self, "current_tick", 0) if tick is None else tick
+                    now_tick
                 ))
                 if max_ticks is not None else None
             )
@@ -1791,6 +1878,8 @@ class DecisionEngine:
                 or minimum_completion_ticks <= ticks_remaining
             )
             candidate["minimum_completion_ticks"] = minimum_completion_ticks
+            candidate["planning_completion_ticks"] = planning_completion_ticks
+            candidate["productive_crew_limit"] = productive_crew
             candidate["ticks_remaining"] = ticks_remaining
             candidate["deadline_feasible"] = deadline_feasible
             candidate["actionable"] = bool(
@@ -4586,7 +4675,19 @@ class DecisionEngine:
                                 "reasoning": f"{agent.name} attempting {protocol_msg} on {p_agent.name}",
                                 "deterministic": True
                             }
-                        else:
+                        elif (
+                            route_vitals_safe
+                            and (
+                                is_medic
+                                or p_agent.needs.o2_supply < 30
+                                or p_agent.needs.temperature_stress < 25
+                            )
+                        ):
+                            # A remote response must not cancel the responder's
+                            # own fatigue/O2 return on alternating ticks.  An
+                            # injury-only case also needs the CMO: a first
+                            # responder who cannot execute definitive wound
+                            # care would merely walk to the patient and leave.
                             dx = 1 if p_agent.x > agent.x else (-1 if p_agent.x < agent.x else 0)
                             dy = 1 if p_agent.y > agent.y else (-1 if p_agent.y < agent.y else 0)
                             return {
@@ -4623,7 +4724,11 @@ class DecisionEngine:
                     min_shelter_dist = dist
                     shelter_x, shelter_y = sx, sy
 
-        is_near_shelter = (min_shelter_dist <= 1) or getattr(agent, "_in_habitat", False)
+        # Recovery resources become available only after a completed
+        # pressure transition.  Treating an adjacent 100 m surface parcel as
+        # "inside" let the policy toggle the habitat flag through a wall, then
+        # schedule sleep/eating outside until physics corrected it next tick.
+        is_near_shelter = bool(getattr(agent, "_in_habitat", False))
 
         # A walking precursor crew has a finite EVA operating area. Survival
         # needs may still be handled first on a given tick, but normal work and
@@ -4785,10 +4890,44 @@ class DecisionEngine:
             for mat, qty in agent.inventory.materials.items()
         )
         carried_units = sum(agent.inventory.materials.values())
-        if is_near_shelter and carried_units > 0 and carry_weight >= 8.0:
+        material_haul_target = {
+            "x": lz_x,
+            "y": lz_y,
+            "destination": "material_storage",
+            "mission_action": "deposit_materials",
+        }
+        committed_material_haul = bool(
+            agent.action.action_type == "move"
+            and active_target.get("destination") == "material_storage"
+            and active_target.get("mission_action") == "deposit_materials"
+        )
+        if (
+            route_vitals_safe
+            and committed_material_haul
+            and carried_units > 0
+        ):
+            # Once an offload route has selected a real depot/crate access
+            # point, keep that route across subsequent policy ticks.  Without
+            # this marker the nearest-habitat rule pulled the hauler back after
+            # every step and created an endless two-way shuttle.
             return {
                 "action": "deposit_materials",
-                "target": {"x": lz_x, "y": lz_y},
+                "target": dict(active_target),
+                "reasoning": (
+                    f"{agent.name} continuing the committed physical material "
+                    "offload route"
+                ),
+                "deterministic": True,
+            }
+        if (
+            route_vitals_safe
+            and is_near_shelter
+            and carried_units > 0
+            and carry_weight >= 8.0
+        ):
+            return {
+                "action": "deposit_materials",
+                "target": dict(material_haul_target),
                 "reasoning": (
                     f"{agent.name} offloading {carried_units} gathered units "
                     f"({carry_weight:.1f}kg) before the next EVA"
@@ -4800,24 +4939,34 @@ class DecisionEngine:
             energy = getattr(agent.needs, "energy", 70.0)
             temp_stress = getattr(agent.needs, "temperature_stress", 50.0)
             dist_to_base = min_shelter_dist
-            
+
             # Dynamic comfort threshold based on strength, stamina, and return trip distance
             base_comfort_kg = 6.0 + (strength * 1.8) + ((energy / 100.0) * 6.0)
             dist_penalty = min(12.0, dist_to_base * 0.75)
             comfort_threshold = max(3.5, base_comfort_kg - dist_penalty)
-            
+
             # If weather is dangerously cold or agent is tired, drop threshold to return sooner
             if temp_stress < 44 or energy < 45:
                 comfort_threshold *= 0.65
-                
-            if carry_weight >= comfort_threshold:
+
+            if route_vitals_safe and carry_weight >= comfort_threshold:
                 dx = 1 if shelter_x > agent.x else (-1 if shelter_x < agent.x else 0)
                 dy = 1 if shelter_y > agent.y else (-1 if shelter_y < agent.y else 0)
                 return {
                     "action": "move",
-                    "target": {"dx": dx, "dy": dy, "x": shelter_x, "y": shelter_y},
-                    "reasoning": f"{agent.name} feeling physical strain ({carry_weight:.1f}kg load over {dist_to_base} tiles) — returning to depot",
-                    "deterministic": True
+                    "target": {
+                        "dx": dx,
+                        "dy": dy,
+                        "x": shelter_x,
+                        "y": shelter_y,
+                        "material_haul_staging": True,
+                    },
+                    "reasoning": (
+                        f"{agent.name} feeling physical strain "
+                        f"({carry_weight:.1f}kg load over {dist_to_base} tiles) "
+                        "— returning to the nearest pressure refuge before offload"
+                    ),
+                    "deterministic": True,
                 }
 
         # --- 0.5 THERMAL / FREEZING OVERRIDE (Proactive Core Protection) ---

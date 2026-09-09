@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import math
 import random
 from typing import Iterable, Optional
 
@@ -191,6 +192,11 @@ class ColonyStrategicPolicy:
         self.episode_trace: list[tuple[str, str]] = []
         self.episode_capacity_high_water: dict[str, int] = {}
         self.episode_verified_completions = 0
+        # Measured objective latency includes fabrication, cargo staging,
+        # travel, recovery and installation.  Keeping it separate from the Q
+        # values lets the learner plan a feasible deadline without turning a
+        # particular recipe into a hard-coded preferred action.
+        self.observed_completion_ticks: dict[str, dict[str, float]] = {}
         self.last_outcome: Optional[dict] = None
         if q_table:
             self.load(q_table)
@@ -203,6 +209,18 @@ class ColonyStrategicPolicy:
             self.minimum_epsilon,
             self.initial_epsilon
             * (self.epsilon_decay_per_attempt ** self.exploration_age),
+        )
+
+    def expected_completion_ticks(self, recipe: str, fallback: int) -> int:
+        """Return a conservative measured latency for one physical module."""
+        baseline = max(1, int(fallback))
+        stats = self.observed_completion_ticks.get(str(recipe), {})
+        if not stats:
+            return baseline
+        return max(
+            baseline,
+            int(math.ceil(float(stats.get("mean", baseline)))),
+            int(math.ceil(float(stats.get("last", baseline)))),
         )
 
     def _rng(self, tick: int) -> random.Random:
@@ -541,16 +559,38 @@ class ColonyStrategicPolicy:
                 current = None
                 replan_reason = "water_stock_fill_deadline"
             by_recipe = water_stock_options
+        deadline_options = {
+            recipe: candidate for recipe, candidate in by_recipe.items()
+            if candidate.get("acceptance_deadline_priority", False)
+        }
+        acceptance_deadline_recovery = bool(
+            deadline_options and not safety_options and not urgent_options
+            and not utility_recovery_active and not water_stock_recovery
+        )
+        if acceptance_deadline_recovery:
+            if current is not None and current.recipe not in deadline_options:
+                self._release_unproductive_commitment(
+                    current, state_key=state_key, tick=tick, reward=0.0,
+                    reason="acceptance_last_safe_start",
+                )
+                current = None
+                replan_reason = "acceptance_last_safe_start"
+            by_recipe = deadline_options
         if (
             not safety_options
             and not urgent_options
             and not utility_recovery_active
             and not water_stock_recovery
+            and not acceptance_deadline_recovery
         ):
             # Balance is a deterministic arrival constraint: excess power or
             # water cannot compensate for zero habitat, food or radiation
             # capacity. Keep candidates within one meaningful target fraction
-            # of the least-complete category. This prevents easy-module spam
+            # of the least-complete category. Compare the projected state after
+            # the next real module, and scale the allowance by that category's
+            # configured module count. A fixed 20-point band let a 26-array
+            # power category remain six arrays ahead of nine habitats near the
+            # deadline. This normalized envelope prevents easy-module spam
             # without teaching a fixed build order.
             capacity_options = {
                 recipe: candidate for recipe, candidate in by_recipe.items()
@@ -565,8 +605,32 @@ class ColonyStrategicPolicy:
                 balanced_capacity = {
                     recipe: candidate
                     for recipe, candidate in capacity_options.items()
-                    if float(candidate.get("fulfillment", 0.0))
-                    <= minimum_fulfillment + 0.20 + 1e-9
+                    if (
+                        (
+                            float(candidate.get("fulfillment", 0.0))
+                            <= minimum_fulfillment + 0.20 + 1e-9
+                        )
+                        if (
+                            "required_count" not in candidate
+                            or candidate.get("balance_headroom_modules") is None
+                        )
+                        else (
+                            float(candidate.get("fulfillment", 0.0))
+                            + 1.0 / max(
+                                1, int(candidate.get("required_count", 1))
+                            )
+                            <= minimum_fulfillment + min(
+                                0.20,
+                                max(
+                                    1, int(candidate.get(
+                                        "balance_headroom_modules", 2
+                                    ))
+                                ) / max(
+                                    1, int(candidate.get("required_count", 1))
+                                ),
+                            ) + 1e-9
+                        )
+                    )
                 }
                 utility_options = {
                     recipe: candidate for recipe, candidate in by_recipe.items()
@@ -839,6 +903,18 @@ class ColonyStrategicPolicy:
         )
         net_new_capacity = built_count > previous_peak
         if net_new_capacity:
+            elapsed_ticks = max(1, int(tick) - current.started_tick)
+            latency = self.observed_completion_ticks.setdefault(
+                current.recipe,
+                {"count": 0.0, "mean": 0.0, "last": 0.0},
+            )
+            sample_count = max(0, int(latency.get("count", 0))) + 1
+            old_mean = float(latency.get("mean", 0.0))
+            latency.update({
+                "count": float(sample_count),
+                "mean": old_mean + (elapsed_ticks - old_mean) / sample_count,
+                "last": float(elapsed_ticks),
+            })
             # Reward verified mission value, not raw object count. This keeps
             # physically necessary zero-score prerequisites learnable while
             # making actual balanced-readiness gain much more valuable than
@@ -986,6 +1062,15 @@ class ColonyStrategicPolicy:
             "exploration_age": int(self.exploration_age),
             "total_reward": round(float(self.total_reward), 6),
             "decision_count": int(self.decision_count),
+            "observed_completion_ticks": {
+                recipe: {
+                    "count": int(stats.get("count", 0)),
+                    "mean": round(float(stats.get("mean", 0.0)), 3),
+                    "last": int(stats.get("last", 0)),
+                }
+                for recipe, stats in self.observed_completion_ticks.items()
+                if int(stats.get("count", 0)) > 0
+            },
         }
         return payload
 
@@ -1021,6 +1106,19 @@ class ColonyStrategicPolicy:
         )
         self.total_reward = float(metadata.get("total_reward", 0.0))
         self.decision_count = max(0, int(metadata.get("decision_count", 0)))
+        self.observed_completion_ticks = {}
+        for recipe, raw_stats in dict(
+            metadata.get("observed_completion_ticks", {}) or {}
+        ).items():
+            if not isinstance(raw_stats, dict):
+                continue
+            count = max(0, int(raw_stats.get("count", 0)))
+            mean = max(0.0, float(raw_stats.get("mean", 0.0)))
+            last = max(0, int(raw_stats.get("last", 0)))
+            if count > 0 and mean > 0.0 and last > 0:
+                self.observed_completion_ticks[str(recipe)] = {
+                    "count": float(count), "mean": mean, "last": float(last)
+                }
 
     def telemetry(self) -> dict:
         current = self.commitment
@@ -1037,4 +1135,5 @@ class ColonyStrategicPolicy:
             "current_objective": current.recipe if current else None,
             "current_action": current.action_key if current else None,
             "last_outcome": dict(self.last_outcome) if self.last_outcome else None,
+            "observed_completion_recipes": len(self.observed_completion_ticks),
         }

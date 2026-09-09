@@ -136,7 +136,7 @@ class SharedConstructionRealismTest(unittest.TestCase):
         }
 
         self.assertEqual(26, remaining["solar_panel"])
-        self.assertEqual(4, remaining["life_support_distribution_grid"])
+        self.assertEqual(5, remaining["life_support_distribution_grid"])
         self.assertGreater(
             requirements["metal_pipe"], pooled.get("metal_pipe", 0)
         )
@@ -926,6 +926,39 @@ class SharedConstructionRealismTest(unittest.TestCase):
         self.assertEqual(structure_count, len(self.engine.placed_structures))
         self.assertEqual("plan_construction", planner.action.action_type)
         self.assertTrue(planner.action.target["planning_only"])
+
+    def test_deadline_forecast_uses_real_workfront_crew_limit(self):
+        captured = {}
+
+        def capture(**kwargs):
+            captured["candidates"] = kwargs["candidates"]
+            return kwargs["candidates"][0]
+
+        original = self.engine.strategic_policy.choose
+        self.engine.strategic_policy.choose = capture
+        try:
+            self.engine.decision_engine._select_shared_capacity_order(
+                dict(self.engine.central_depot_inventory), {}, tick=0
+            )
+        finally:
+            self.engine.strategic_policy.choose = original
+
+        by_recipe = {
+            candidate["recipe"]: candidate
+            for candidate in captured["candidates"]
+        }
+        solar = by_recipe["solar_panel"]
+        habitat = by_recipe["habitat_module"]
+        self.assertEqual(2, solar["productive_crew_limit"])
+        self.assertEqual(3, habitat["productive_crew_limit"])
+        self.assertEqual(
+            2 * solar["minimum_completion_ticks"],
+            solar["planning_completion_ticks"],
+        )
+        self.assertEqual(
+            2 * habitat["minimum_completion_ticks"],
+            habitat["planning_completion_ticks"],
+        )
 
     def test_site_productivity_is_capped_at_recommended_crew(self):
         x, y = self.engine._select_structure_site("solar_panel")

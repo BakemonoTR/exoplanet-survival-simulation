@@ -234,6 +234,67 @@ class SharedStrategicRLTest(unittest.TestCase):
         )
         self.assertEqual("isru_o2_unit", selected["recipe"])
 
+    def test_late_balance_uses_each_categorys_real_module_increment(self):
+        policy = ColonyStrategicPolicy(
+            "planet-a", seed=1, initial_epsilon=0.0, minimum_epsilon=0.0
+        )
+        policy.q_table["s0"] = {
+            "capacity:solar_panel": 100.0,
+            "capacity:isru_o2_unit": 50.0,
+            "capacity:habitat_module": -100.0,
+        }
+        selected = policy.choose(
+            state_key="s0",
+            candidates=[
+                {
+                    "recipe": "solar_panel", "fulfillment": 23 / 26,
+                    "required_count": 26, "balance_headroom_modules": 1,
+                },
+                {
+                    "recipe": "isru_o2_unit", "fulfillment": 17 / 20,
+                    "required_count": 20, "balance_headroom_modules": 1,
+                },
+                {
+                    "recipe": "habitat_module", "fulfillment": 7 / 9,
+                    "required_count": 9, "balance_headroom_modules": 1,
+                },
+            ],
+            structures_built={
+                "solar_panel": 23, "isru_o2_unit": 17,
+                "habitat_module": 7,
+            },
+            tick=45_000,
+            colony_score=85.0,
+        )
+        self.assertEqual("habitat_module", selected["recipe"])
+
+    def test_last_safe_start_masks_a_high_value_nonurgent_action(self):
+        policy = ColonyStrategicPolicy(
+            "planet-a", seed=1, initial_epsilon=0.0, minimum_epsilon=0.0
+        )
+        policy.q_table["s0"] = {
+            "capacity:solar_panel": 100.0,
+            "capacity:greenhouse": -100.0,
+        }
+        selected = policy.choose(
+            state_key="s0",
+            candidates=[
+                {
+                    "recipe": "solar_panel", "fulfillment": 0.5,
+                    "required_count": 26,
+                },
+                {
+                    "recipe": "greenhouse", "fulfillment": 5 / 6,
+                    "required_count": 6,
+                    "acceptance_deadline_priority": True,
+                },
+            ],
+            structures_built={"solar_panel": 13, "greenhouse": 5},
+            tick=40_000,
+            colony_score=70.0,
+        )
+        self.assertEqual("greenhouse", selected["recipe"])
+
     def test_exhausting_bootstrap_power_preempts_an_unstarted_commitment(self):
         policy = ColonyStrategicPolicy(
             "planet-a", seed=1, initial_epsilon=0.0, minimum_epsilon=0.0
@@ -680,6 +741,27 @@ class SharedStrategicRLTest(unittest.TestCase):
         self.assertEqual(1, restored.exploration_age)
         self.assertLess(restored.epsilon, epsilon_before)
         self.assertEqual("timeout", policy.last_outcome["outcome"])
+
+    def test_measured_objective_latency_persists_for_future_deadlines(self):
+        policy = ColonyStrategicPolicy("planet-a", seed=1)
+        selected = policy.choose(
+            state_key="s0",
+            candidates=[{"recipe": "habitat_module", "required_count": 9}],
+            structures_built={}, tick=100, colony_score=0.0,
+        )
+        self.assertEqual("habitat_module", selected["recipe"])
+        policy.observe_completion(
+            structures_built={"habitat_module": 1},
+            tick=820,
+            colony_score=5.0,
+            tick_minutes=10.0,
+            next_state_key="s1",
+        )
+
+        self.assertEqual(720, policy.expected_completion_ticks("habitat_module", 10))
+        restored = ColonyStrategicPolicy("planet-a", q_table=policy.dump())
+        self.assertEqual(720, restored.expected_completion_ticks("habitat_module", 10))
+        self.assertEqual(10, restored.expected_completion_ticks("solar_panel", 10))
 
     def test_zero_progress_failure_does_not_decay_exploration(self):
         policy = ColonyStrategicPolicy("planet-a", seed=1)

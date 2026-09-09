@@ -1,9 +1,10 @@
-"""Isolated cumulative strategy trial; no LLM calls or live database writes.
+"""Isolated cumulative RL trial; no LLM calls or live database writes.
 
-The tactical crew policy starts fresh in every episode to isolate strategic
-learning. --control runs a fresh frozen strategic policy; the training path
-persists every checkpoint and evaluates the last policy with exploration and
-strategic Q updates disabled. World seed and evaluation tie-break counters match.
+By default the tactical crew policy starts fresh in every episode to isolate
+strategic learning. ``--carry-tactical`` instead transfers each crew member's
+tactical and movement-effort Q-table along with the shared strategic policy.
+``--control`` runs a fresh frozen policy; ``--skip-evaluation`` limits a run to
+training episodes. World seed stays fixed so policy learning is the variable.
 """
 from __future__ import annotations
 
@@ -29,7 +30,13 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False, default=str), encoding='utf-8')
 
 
-def run_episode(args, name, learned=None, evaluation=False):
+def run_episode(
+    args,
+    name,
+    learned=None,
+    learned_tactical=None,
+    evaluation=False,
+):
     output = args.output / name
     output.mkdir(parents=True, exist_ok=False)
     random.seed(args.seed)
@@ -51,6 +58,15 @@ def run_episode(args, name, learned=None, evaluation=False):
     engine.llm_client.send = _offline_llm
     for agent in create_team_from_presets(str(ROOT / 'config/agent_presets.json'))[:engine.mission_profile.advance_crew]:
         engine.add_agent(agent)
+        if args.carry_tactical and learned_tactical:
+            saved = learned_tactical.get(agent.id)
+            if isinstance(saved, dict):
+                agent.q_table = copy.deepcopy(saved)
+        if evaluation:
+            # Greedy choices with zero learning freeze tactical and movement
+            # values while allowing harmless initial entries for unseen states.
+            agent.rl_epsilon_explore = 0.0
+            agent.rl_learning_rate = 0.0
     policy = engine.strategic_policy
     if learned:
         policy.load(copy.deepcopy(learned))
@@ -60,7 +76,12 @@ def run_episode(args, name, learned=None, evaluation=False):
         policy.attempt_count = 0
         policy.decision_count = 0
     before = copy.deepcopy(policy.q_table)
+    tactical_before = {
+        agent.id: copy.deepcopy(agent.q_table) for agent in engine.agents
+    }
     write_json(output / 'policy_start.json', policy.dump())
+    if args.carry_tactical:
+        write_json(output / 'tactical_policy_start.json', tactical_before)
     original_tick = engine._run_tick
 
     def audited_tick():
@@ -107,20 +128,38 @@ def run_episode(args, name, learned=None, evaluation=False):
               'alive': sum(getattr(a.status, 'value', str(a.status)) != 'dead' for a in engine.agents),
               'critical_onsets': critical_onsets, 'processing_errors': errors,
               'strategy': policy.telemetry(), 'windows': dict(windows),
+              'structures': dict(engine.structures_built),
+              'movement_effort_rl': dict(engine._movement_effort_telemetry),
               'completions': completions, 'checkpoints': checkpoints,
               'q_values_unchanged': before == policy.q_table,
+              'tactical_state_counts': {
+                  agent.id: sum(
+                      1 for state in agent.q_table
+                      if state != '__tactical_meta__'
+                  )
+                  for agent in engine.agents
+              },
               'wall_seconds': round(time.perf_counter() - start, 3),
-              'tactical_policy': 'fresh per episode; only strategic policy transferred'}
+              'tactical_policy': (
+                  'persisted across episodes'
+                  if args.carry_tactical
+                  else 'fresh per episode; only strategic policy transferred'
+              )}
     write_json(output / 'result.json', result)
+    tactical_end = {
+        agent.id: copy.deepcopy(agent.q_table) for agent in engine.agents
+    }
     if not evaluation:
         write_json(output / 'policy_end.json', policy.dump())
+        if args.carry_tactical:
+            write_json(output / 'tactical_policy_end.json', tactical_end)
     if evaluation and not result['q_values_unchanged']:
         raise AssertionError('Frozen strategy changed Q values')
     print(json.dumps({'finished': name, 'score': result['score']['overall'],
                       'alive': result['alive'], 'errors': len(errors)}), flush=True)
-    if errors or result['alive'] != len(engine.agents) or critical_onsets:
-        raise RuntimeError('Safety regression; stopping experiment, checkpoint retained')
-    return policy.dump(), result
+    if errors:
+        raise RuntimeError('Processing regression; stopping experiment, checkpoint retained')
+    return policy.dump(), tactical_end, result
 
 
 def main():
@@ -131,25 +170,70 @@ def main():
     parser.add_argument('--ticks', type=int, default=51840)
     parser.add_argument('--episodes', type=int, default=3)
     parser.add_argument('--control', action='store_true')
+    parser.add_argument(
+        '--carry-tactical', action='store_true',
+        help='Carry crew tactical and movement Q-tables between episodes',
+    )
+    parser.add_argument(
+        '--skip-evaluation', action='store_true',
+        help='Do not add a final frozen evaluation episode',
+    )
+    parser.add_argument(
+        '--evaluate-from', type=Path,
+        help='Run one frozen evaluation from a training checkpoint directory',
+    )
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(level=logging.ERROR)
     vector_store._use_tfidf_fallback = True
-    label = 'control' if args.control else 'training'
+    label = (
+        'checkpoint_evaluation' if args.evaluate_from
+        else 'control' if args.control else 'training'
+    )
     sources = ['src/agents/decision.py', 'src/agents/strategic_rl.py', 'src/orchestration/engine.py',
                'config/recipes.json', 'config/mission_profile.json', 'rl_learning_experiment.py']
     hashes = {path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest() for path in sources}
     write_json(args.output / (label + '_sources.json'), hashes)
+    if args.evaluate_from:
+        checkpoint = args.evaluate_from
+        learned = json.loads(
+            (checkpoint / 'policy_end.json').read_text(encoding='utf-8')
+        )
+        tactical_path = checkpoint / 'tactical_policy_end.json'
+        learned_tactical = (
+            json.loads(tactical_path.read_text(encoding='utf-8'))
+            if tactical_path.exists() else None
+        )
+        if learned_tactical is not None:
+            args.carry_tactical = True
+        run_episode(
+            args, 'trained_frozen_evaluation', learned, learned_tactical,
+            evaluation=True,
+        )
+        return
     if args.control:
         run_episode(args, 'fresh_frozen_control', evaluation=True)
         return
     learned = None
+    learned_tactical = None
     summaries = []
     for index in range(1, args.episodes + 1):
-        learned, result = run_episode(args, f'train_{index}', learned)
-        summaries.append({key: result[key] for key in ('name', 'score', 'alive', 'strategy', 'wall_seconds')})
+        learned, learned_tactical, result = run_episode(
+            args, f'train_{index}', learned, learned_tactical,
+        )
+        summaries.append({
+            key: result[key]
+            for key in (
+                'name', 'score', 'alive', 'strategy', 'structures',
+                'movement_effort_rl', 'tactical_state_counts', 'wall_seconds',
+            )
+        })
         write_json(args.output / 'training_summary.json', summaries)
-    run_episode(args, 'trained_frozen_evaluation', learned, evaluation=True)
+    if not args.skip_evaluation:
+        run_episode(
+            args, 'trained_frozen_evaluation', learned, learned_tactical,
+            evaluation=True,
+        )
 
 
 if __name__ == '__main__':

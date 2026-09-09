@@ -911,6 +911,18 @@ class SurfaceFleet:
         rover.payload_mass_kg = 0.0
         return payload
 
+    def cancel_crew_rover_trip(self, expedition_id: str) -> bool:
+        """Release a rover mission cancelled before its sheltered crew departs."""
+        rover = self.crew_rover_for_expedition(expedition_id)
+        if rover is None:
+            return False
+        if rover.payload:
+            return False
+        rover.x, rover.y = self.base_x, self.base_y
+        rover.state = "charging"
+        rover.mission = None
+        return True
+
     def complete_crew_rover_trip(self, expedition_id: str) -> bool:
         rover = self.crew_rover_for_expedition(expedition_id)
         if rover is None:

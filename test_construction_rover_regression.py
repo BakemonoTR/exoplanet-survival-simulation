@@ -125,6 +125,65 @@ class ConstructionRoverRegressionTest(unittest.TestCase):
             self.assertEqual("returning", crew._active_expedition["status"])
         self.assertEqual((self.crew[0].x, self.crew[0].y), (self.crew[1].x, self.crew[1].y))
 
+    def test_utility_workfront_walk_does_not_drag_parked_rover(self):
+        self._arrive()
+        lead = self.crew[0]
+        rover = self.engine.surface_fleet.crew_rovers[0]
+        parked = (rover.x, rover.y)
+        target = {
+            "x": lead.x + 5,
+            "y": lead.y,
+            "destination": "construction_site",
+            "construction_route": True,
+            "utility_route_workfront": True,
+            "expedition": True,
+            "transport": "on_foot",
+        }
+        self.planner.process_tick = lambda **_kwargs: {
+            "action": "move", "target": target, "deterministic": True,
+        }
+
+        self.engine.current_tick += 1
+        self.engine._process_agent_tick(lead, [], 1)
+
+        self.assertEqual(parked, (rover.x, rover.y))
+        self.assertNotEqual(parked, (lead.x, lead.y))
+
+    def test_split_returning_crew_walk_individually_to_physical_rover(self):
+        state = self._arrive()
+        lead, buddy = self.crew
+        rover = self.engine.surface_fleet.crew_rovers[0]
+        # Reproduce a saved/legacy mismatch: route metadata still ends at the
+        # structure, while the physical rover is parked at the workfront.
+        rover.x, rover.y = self.site["x"] + 5, self.site["y"]
+        lead.x, lead.y = self.site["x"], self.site["y"]
+        buddy.x, buddy.y = self.site["x"] + 3, self.site["y"]
+        buddy.action.action_type = "sleep"
+        buddy.action.target = {"habitat": True}
+        buddy.action.ticks_remaining = 4
+        for crew in self.crew:
+            crew._in_habitat = False
+            crew._active_expedition["status"] = "returning"
+            crew._active_expedition["route_index"] = len(state["route"]) - 1
+
+        self.engine.current_tick += 1
+        self.engine._move_construction_rover_team(
+            lead, {"destination": "shelter", "expedition": True}
+        )
+
+        self.assertEqual((self.site["x"] + 1, self.site["y"]), (lead.x, lead.y))
+        self.assertEqual((self.site["x"] + 3, self.site["y"]), (buddy.x, buddy.y))
+        self.assertEqual("sleep", buddy.action.action_type)
+        self.engine._move_construction_rover_team(
+            buddy,
+            {"x": self.engine.lz_x, "y": self.engine.lz_y,
+             "destination": "material_storage"},
+        )
+        self.assertEqual((self.site["x"] + 4, self.site["y"]), (buddy.x, buddy.y))
+        self.assertEqual(
+            "construction_rover_rendezvous", buddy.action.target["destination"]
+        )
+
     def test_faulted_rover_falls_back_to_physical_walkback(self):
         self._arrive()
         origin = (self.crew[0].x, self.crew[0].y)

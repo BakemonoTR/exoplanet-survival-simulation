@@ -307,27 +307,27 @@
     }
   },
   "delivered_field_stock": {
-    "machined_bolts_fasteners": {"quantity": 23433, "unit_mass_kg": 0.2},
+    "machined_bolts_fasteners": {"quantity": 23773, "unit_mass_kg": 0.2},
     "structural_truss_section": {
-      "quantity": 1411,
+      "quantity": 1419,
       "unit_mass_kg": 41.0,
       "notes": "This is 85% of the direct 106-person mission truss BOM. The landed forges form and weld the remaining share from local iron while preserving a bounded one-year critical path."
     },
-    "power_cable_harness": {"quantity": 626, "unit_mass_kg": 18.0},
+    "power_cable_harness": {"quantity": 635, "unit_mass_kg": 18.0},
     "rope_cordage": {"quantity": 448, "unit_mass_kg": 3.0},
-    "electronic_component": {"quantity": 454, "unit_mass_kg": 0.8},
+    "electronic_component": {"quantity": 460, "unit_mass_kg": 0.8},
     "insulated_fabric": {"quantity": 419, "unit_mass_kg": 1.5},
     "metal_pipe": {
-      "quantity": 4988,
+      "quantity": 6136,
       "unit_mass_kg": 3.5,
-      "notes": "Approximately 85% of the 5,868 pressure-tube units directly required by four three-circuit utility vaults and the full 106-person capacity build is delivered as inspected prefab stock; the remaining direct share and downstream subassembly demand are made by the landed shop."
+      "notes": "Approximately 85% of the 7,218 pressure-tube units directly required by five three-circuit utility vaults and the full 106-person capacity build is delivered as inspected prefab stock; the remaining direct share and downstream subassembly demand are made by the landed shop."
     },
-    "vacuum_gasket_seal": {"quantity": 769, "unit_mass_kg": 0.25},
+    "vacuum_gasket_seal": {"quantity": 837, "unit_mass_kg": 0.25},
     "composite_panel": {"quantity": 259, "unit_mass_kg": 12.0},
-    "pressure_vessel_section": {"quantity": 220, "unit_mass_kg": 64.0},
+    "pressure_vessel_section": {"quantity": 223, "unit_mass_kg": 64.0},
     "glass_pane": {"quantity": 92, "unit_mass_kg": 4.0},
-    "thermal_control_loop": {"quantity": 89, "unit_mass_kg": 55.0},
-    "pump_compressor_module": {"quantity": 58, "unit_mass_kg": 36.0},
+    "thermal_control_loop": {"quantity": 91, "unit_mass_kg": 55.0},
+    "pump_compressor_module": {"quantity": 60, "unit_mass_kg": 36.0},
     "electrolysis_stack": {"quantity": 17, "unit_mass_kg": 52.0},
     "reduced_iron_ingot": {"quantity": 327, "unit_mass_kg": 5.0},
     "finned_heat_sink": {"quantity": 2, "unit_mass_kg": 8.0}
@@ -409,7 +409,7 @@
       "travel_power_kw": 2.0,
       "return_reserve_fraction": 0.20,
       "operating_power_kw": 2.0,
-      "construction_equivalent_workers": 1.5,
+      "construction_equivalent_workers": 2.0,
       "max_supervised_per_crew": 2,
       "requires_onsite_supervisor": true,
       "condition_loss_per_operating_hour": 0.0002,

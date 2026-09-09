@@ -34,7 +34,6 @@
         storage_crate: 0.48,
         communications_array: 0.58,
         medical_station: 0.62,
-        radiation_shelter: 0.70,
         habitat_module: 0.72,
         basic_shelter: 0.68,
         greenhouse: 0.72,
@@ -48,7 +47,6 @@
         eclss_lander_hub: 'LANDER HUB',
         habitat_module: 'HABITAT',
         basic_shelter: 'SHELTER',
-        radiation_shelter: 'STORM SHELTER',
         medical_station: 'MEDICAL',
         greenhouse: 'GREENHOUSE',
         hydroponics: 'HYDROPONICS',
@@ -199,21 +197,6 @@
 
         if (type === 'habitat_module' || type === 'basic_shelter' || type === 'medical_station') {
             drawPressureModule(ctx, cx, cy, bw, bh, type === 'medical_station' ? palette.danger : palette.safety, type === 'medical_station');
-        } else if (type === 'radiation_shelter') {
-            ctx.fillStyle = palette.regolithDark;
-            ctx.strokeStyle = palette.regolith;
-            ctx.lineWidth = 1.2;
-            ctx.beginPath();
-            ctx.ellipse(cx, cy + bh * 0.10, bw * 0.44, bh * 0.35, 0, Math.PI, Math.PI * 2);
-            ctx.lineTo(cx + bw * 0.44, cy + bh * 0.22);
-            ctx.lineTo(cx - bw * 0.44, cy + bh * 0.22);
-            ctx.closePath();
-            ctx.fill();
-            ctx.stroke();
-            ctx.fillStyle = '#2d302e';
-            ctx.strokeStyle = palette.safety;
-            ctx.fillRect(cx - bw * 0.11, cy - bh * 0.05, bw * 0.22, bh * 0.27);
-            ctx.strokeRect(cx - bw * 0.11, cy - bh * 0.05, bw * 0.22, bh * 0.27);
         } else if (type === 'greenhouse' || type === 'hydroponics') {
             const x = cx - bw * 0.45;
             const y = cy - bh * 0.25;
@@ -778,7 +761,6 @@
         potable_water_tank: 0.58,
         oxygen_buffer_tank: 0.58,
         habitat_module: 0.72,
-        radiation_shelter: 0.72,
         medical_station: 0.64,
         water_collector: 0.66,
         water_purifier: 0.60,

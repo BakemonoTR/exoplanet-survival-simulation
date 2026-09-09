@@ -900,6 +900,161 @@ class EmergencyRealismTest(unittest.TestCase):
         self.assertEqual(before + 10, self.engine.central_depot_inventory["basalt"])
         self.assertEqual({}, agent.inventory.materials)
 
+    def test_heavy_payload_commits_to_storage_after_staging_at_habitat(self):
+        agent = self.crew[0]
+        habitat_x = self.engine.lz_x + 6
+        habitat_y = self.engine.lz_y - 10
+        agent.x = habitat_x
+        agent.y = habitat_y - 1
+        agent._in_habitat = False
+        agent.action.action_type = "idle"
+        agent.action.target = {}
+        agent.inventory.materials.clear()
+        agent.inventory.add_material("iron_ore", 6)
+        depot_before = int(
+            self.engine.central_depot_inventory.get("iron_ore", 0)
+        )
+        self.engine.placed_structures.append({
+            "id": "nearby_habitat",
+            "type": "habitat_module",
+            "x": habitat_x,
+            "y": habitat_y,
+            "under_construction": False,
+            "destroyed": False,
+            "health": 1.0,
+        })
+
+        # Heavy field cargo first reaches the nearest pressure refuge.
+        self.engine._process_agent_tick(agent, [], nearby_count=1)
+        self.assertEqual((habitat_x, habitat_y), (agent.x, agent.y))
+
+        # The next decision selects a real depot/crate access point.
+        self.engine.current_tick += 1
+        self.engine._process_agent_tick(agent, [], nearby_count=1)
+        self.assertEqual("move", agent.action.action_type)
+        self.assertEqual(
+            "deposit_materials", agent.action.target.get("mission_action")
+        )
+        self.assertEqual(
+            "material_storage", agent.action.target.get("destination")
+        )
+        storage_id = agent.action.target.get("storage_id")
+
+        # Terrain and pressure transitions may include stationary or detour
+        # ticks. Every visible haul leg must nevertheless retain the same
+        # access point, and the finite payload must reach storage.
+        for _ in range(12):
+            if not agent.inventory.materials:
+                break
+            self.engine.current_tick += 1
+            self.engine._process_agent_tick(agent, [], nearby_count=1)
+            if agent.action.target.get("mission_action") == "deposit_materials":
+                self.assertEqual(
+                    storage_id, agent.action.target.get("storage_id")
+                )
+                self.assertEqual(
+                    "material_storage",
+                    agent.action.target.get("destination"),
+                )
+
+        self.assertEqual({}, agent.inventory.materials)
+        self.assertEqual(
+            depot_before + 6,
+            self.engine.central_depot_inventory.get("iron_ore", 0),
+        )
+
+    def test_unsafe_heavy_hauler_returns_to_shelter_before_offloading(self):
+        agent = self.crew[0]
+        agent.x = self.engine.lz_x + 6
+        agent.y = self.engine.lz_y - 18
+        agent._in_habitat = False
+        agent.needs.energy = 55.0
+        agent.inventory.materials.clear()
+        agent.inventory.add_material("iron_ore", 6)
+        self.engine.placed_structures.append({
+            "id": "recovery_habitat",
+            "type": "habitat_module",
+            "x": self.engine.lz_x + 6,
+            "y": self.engine.lz_y - 10,
+            "under_construction": False,
+            "destroyed": False,
+            "health": 1.0,
+        })
+
+        self.engine._process_agent_tick(agent, [], nearby_count=1)
+
+        self.assertEqual("move", agent.action.action_type)
+        self.assertTrue(agent.action.target.get("fatigue_return"))
+        self.assertEqual(
+            (self.engine.lz_x + 6, self.engine.lz_y - 10),
+            (agent.action.target.get("x"), agent.action.target.get("y")),
+        )
+
+    def test_fatigued_medic_keeps_return_route_instead_of_chasing_patient(self):
+        patient, medic = self.crew
+        patient.x = self.engine.lz_x + 12
+        patient.y = self.engine.lz_y
+        patient._in_habitat = False
+        patient.injury_level = 0.45
+        medic.x = self.engine.lz_x + 8
+        medic.y = self.engine.lz_y
+        medic._in_habitat = False
+        medic.needs.energy = 60.0
+        medic.action.action_type = "move"
+        medic.action.target = {
+            "x": self.engine.lz_x,
+            "y": self.engine.lz_y,
+            "destination": "shelter",
+            "fatigue_return": True,
+        }
+
+        decision = self.engine.decision_engine.process_tick(
+            medic,
+            tick=42830,
+            tick_events={},
+            world_context={
+                "effective_temperature_c": 20.0,
+                "active_events": [],
+                "colony_resources": self.engine._colony_resources,
+            },
+            nearby_agents=[{"agent_obj": patient}],
+        )
+
+        self.assertEqual("move", decision["action"])
+        self.assertTrue(decision["target"].get("fatigue_return"))
+        self.assertFalse(decision["target"].get("medical_response", False))
+
+    def test_adjacent_remote_habitat_requires_physical_entry_before_sleep(self):
+        agent = self.crew[0]
+        habitat_x = self.engine.lz_x + 8
+        habitat_y = self.engine.lz_y + 8
+        self.engine.placed_structures.append({
+            "id": "remote_sleep_habitat",
+            "type": "habitat_module",
+            "x": habitat_x,
+            "y": habitat_y,
+            "under_construction": False,
+            "destroyed": False,
+            "health": 1.0,
+        })
+        agent.x = habitat_x - 1
+        agent.y = habitat_y
+        agent._in_habitat = False
+        agent.needs.energy = 55.0
+        agent.action.action_type = "idle"
+        agent.action.target = {}
+
+        self.engine._process_agent_tick(agent, [], nearby_count=1)
+
+        self.assertEqual((habitat_x, habitat_y), (agent.x, agent.y))
+        self.assertTrue(agent._in_habitat)
+        self.assertTrue(self.engine._is_pressurized_location(agent.x, agent.y))
+        self.assertTrue(self.engine._is_crew_quarters_location(agent))
+        self.assertFalse(
+            agent.action.action_type == "sleep"
+            and not self.engine._is_crew_quarters_location(agent)
+        )
+
     def test_remote_chalcopyrite_ore_request_does_not_preempt_ready_starter_solar(self):
         agent = self.crew[0]
         agent.x = self.engine.lz_x
@@ -1094,7 +1249,10 @@ class EmergencyRealismTest(unittest.TestCase):
             self.engine._tick_surface_fleet()
             self.engine.current_tick += 1
 
-        self.assertEqual("build", agent.action.action_type)
+        # Once cargo is committed, life-support construction now begins with
+        # the real buried utility route rather than abstract assembly in place.
+        self.assertEqual("move", agent.action.action_type)
+        self.assertTrue(agent.action.target.get("utility_route_workfront"))
         self.assertEqual(0, self.engine.central_depot_inventory["oxygen_canisters"])
         self.assertTrue(any(
             structure.get("type") == "isru_o2_unit"
@@ -2997,9 +3155,8 @@ class EmergencyRealismTest(unittest.TestCase):
 
     def test_airlock_crew_can_drink_from_central_water_reserve(self):
         agent = self.crew[0]
-        agent.x = self.engine.lz_x + 1
-        agent.y = self.engine.lz_y
-        agent._in_habitat = False
+        agent.x, agent.y = self.engine._lander_airlock_position()
+        agent._in_habitat = True
         agent.inventory.items.pop("water_packs", None)
         self.engine.central_depot_inventory["water_packs"] = 0
         self.engine._colony_resources["water_reserve_l"] = 5.0

@@ -53,6 +53,93 @@ class CrewOperationsRegressionTest(unittest.TestCase):
                 self.engine._process_agent_tick(agent, [], 0)
         self.assertEqual(0.95, agent.suit_condition)
 
+    def test_indoor_wash_cancels_sheltered_rover_departure(self):
+        lead, buddy = self.crew[:2]
+        expedition_id = "wash-race-expedition"
+        target_x, target_y = self.engine.lz_x + 12, self.engine.lz_y
+        reservation = self.engine.surface_fleet.begin_crew_rover_trip(
+            expedition_id=expedition_id,
+            crew_ids=[lead.id, buddy.id],
+            target_x=target_x,
+            target_y=target_y,
+            route=[
+                {"x": self.engine.lz_x, "y": self.engine.lz_y},
+                {"x": target_x, "y": target_y},
+            ],
+        )
+        self.assertTrue(reservation["reserved"])
+        for member, role in ((lead, "lead"), (buddy, "buddy")):
+            member.x, member.y = self.engine.lz_x, self.engine.lz_y
+            member._in_habitat = True
+            member._active_expedition = {
+                "id": expedition_id,
+                "lead_id": lead.id,
+                "buddy_id": buddy.id,
+                "role": role,
+                "status": "outbound",
+                "transport": "crew_rover",
+                "target_x": target_x,
+                "target_y": target_y,
+            }
+        self.engine.airlock.charge_cycle(
+            [lead.id, buddy.id], "out", self.engine._colony_resources
+        )
+        lead.needs.hygiene = 20.0
+
+        with patch.object(
+            self.planner,
+            "process_tick",
+            return_value={
+                "action": "wash",
+                "target": {"habitat": True, "water_liters": 2.0},
+                "deterministic": True,
+            },
+        ):
+            self.engine._process_agent_tick(lead, [], 0)
+
+        self.assertEqual("wash", lead.action.action_type)
+        self.assertTrue(lead._in_habitat)
+        self.assertIsNone(lead._active_expedition)
+        self.assertIsNone(buddy._active_expedition)
+        self.assertIsNone(
+            self.engine.surface_fleet.crew_rover_for_expedition(expedition_id)
+        )
+        self.assertNotIn(lead.id, self.engine.airlock.return_reserves)
+        self.assertNotIn(buddy.id, self.engine.airlock.return_reserves)
+
+    def test_outbound_airlock_race_cannot_apply_wash_outside(self):
+        agent = self.crew[0]
+        agent.x, agent.y = self.engine.lz_x, self.engine.lz_y
+        agent._in_habitat = True
+        agent.needs.hygiene = 20.0
+        water_before = agent.inventory.items.get("water_packs", 0)
+
+        def finish_outbound_cycle(subject, action, target):
+            subject.x, subject.y = self.engine._lander_airlock_position()
+            subject.y += 1
+            subject._in_habitat = False
+            return action, target
+
+        with patch.object(
+            self.planner,
+            "process_tick",
+            return_value={
+                "action": "wash",
+                "target": {"habitat": True, "water_liters": 2.0},
+                "deterministic": True,
+            },
+        ), patch.object(
+            self.engine,
+            "_material_pickup_decision",
+            side_effect=finish_outbound_cycle,
+        ):
+            self.engine._process_agent_tick(agent, [], 0)
+
+        self.assertEqual("move", agent.action.action_type)
+        self.assertEqual("wash", agent.action.target.get("indoor_recovery_return"))
+        self.assertLess(agent.needs.hygiene, 30.0)
+        self.assertEqual(water_before, agent.inventory.items.get("water_packs", 0))
+
     def test_external_sleep_intent_returns_without_sleep(self):
         agent = self.crew[0]
         agent._in_habitat = False

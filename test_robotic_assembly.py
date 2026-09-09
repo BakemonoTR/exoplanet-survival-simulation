@@ -91,11 +91,11 @@ class RoboticAssemblyTests(unittest.TestCase):
         )
         assisted = fleet.assembly_assist(site_id="habitat-01", builder_count=1)
         self.assertEqual(len(assisted["active_robot_ids"]), 2)
-        self.assertAlmostEqual(assisted["equivalent_workers"], 3.0)
-        self.assertAlmostEqual(assisted["work_hours"], 0.5)
+        self.assertAlmostEqual(assisted["equivalent_workers"], 4.0)
+        self.assertAlmostEqual(assisted["work_hours"], 2.0 / 3.0)
         self.assertAlmostEqual(
             sum(robot.total_assembly_work_hours for robot in fleet.assembly_robots),
-            0.5,
+            2.0 / 3.0,
         )
 
         unsupervised = fleet.assembly_assist(

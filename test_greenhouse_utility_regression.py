@@ -218,6 +218,188 @@ class GreenhouseUtilityRegressionTest(unittest.TestCase):
         self.engine._colony_resources["energy_stored_kwh"] = 0.0
         self.assertIsNotNone(self.engine._select_utility_feasible_site("greenhouse", [self.candidate(3, 3)]))
 
+    def test_new_endpoint_cannot_connect_until_its_stored_route_is_installed(self):
+        self.isolated_grid()
+        x, y = self.engine.lz_x + 2, self.engine.lz_y
+        route = self.engine._plan_utility_construction_route(
+            "water_collector", "physical-water", x, y
+        )
+        self.assertGreaterEqual(len(route), 2)
+        endpoint = self.add("water_collector", "physical-water", 2, 0)
+        endpoint.update({
+            "utility_route_required": True,
+            "utility_route_installed": False,
+            "utility_route_plan": route,
+        })
+        self.engine._utility_network_cache_signature = None
+
+        network = self.engine._life_support_network_snapshot()
+        status = next(
+            item for item in network["endpoints"]
+            if item["structure_id"] == endpoint["id"]
+        )
+        self.assertEqual(
+            "utility_route_installation_incomplete", status["reason"]
+        )
+        self.assertFalse(status["physically_connected"])
+
+        endpoint["utility_route_installed"] = True
+        self.engine._utility_network_cache_signature = None
+        network = self.engine._life_support_network_snapshot()
+        installed = next(
+            item for item in network["routes"]
+            if item["structure_id"] == endpoint["id"]
+        )
+        self.assertTrue(installed["installation_verified"])
+        self.assertEqual(route, installed["path"])
+
+    def test_pre_grid_route_uses_reachable_lander_service_apron(self):
+        x, y = self.engine.lz_x + 6, self.engine.lz_y + 9
+
+        route = self.engine._plan_utility_construction_route(
+            "isru_o2_unit", "bootstrap-o2", x, y
+        )
+
+        self.assertGreaterEqual(len(route), 2)
+        self.assertEqual({"x": x, "y": y}, route[0])
+        self.assertEqual(
+            dict(zip(("x", "y"), self.engine._lander_airlock_exterior_position())),
+            route[-1],
+        )
+        self.assertTrue(all(
+            abs(first["x"] - second["x"])
+            + abs(first["y"] - second["y"]) == 1
+            for first, second in zip(route, route[1:])
+        ))
+
+    def test_site_above_existing_spine_gets_a_real_local_tap(self):
+        self.isolated_grid()
+        existing = self.add("water_collector", "existing-water", 2, 0)
+        existing.update({
+            "utility_route_required": True,
+            "utility_route_installed": True,
+            "utility_route_plan": [
+                {"x": self.engine.lz_x + 2, "y": self.engine.lz_y},
+                {"x": self.engine.lz_x + 1, "y": self.engine.lz_y},
+                {"x": self.engine.lz_x, "y": self.engine.lz_y},
+            ],
+        })
+        self.engine._utility_network_cache_signature = None
+        start = (self.engine.lz_x + 1, self.engine.lz_y)
+
+        route = self.engine._plan_utility_construction_route(
+            "isru_o2_unit", "spine-tap", *start
+        )
+
+        self.assertEqual({"x": start[0], "y": start[1]}, route[0])
+        self.assertGreaterEqual(len(route), 2)
+        self.assertNotEqual(route[0], route[-1])
+        self.assertNotEqual(
+            {"x": existing["x"], "y": existing["y"]}, route[-1],
+            "another consumer's private service port is not a manifold",
+        )
+
+    def test_adjacent_greenhouse_parcel_is_not_inside_pressure_hull(self):
+        farm = self.add("greenhouse", "commissioned-farm", 8, 9)
+
+        self.assertIs(
+            farm,
+            self.engine._pressurized_structure_at(farm["x"], farm["y"]),
+        )
+        self.assertIsNone(
+            self.engine._pressurized_structure_at(
+                farm["x"] + 1, farm["y"] - 1
+            )
+        )
+        self.assertFalse(
+            self.engine._is_pressurized_location(
+                farm["x"] + 1, farm["y"] - 1
+            ),
+            "an exterior utility work parcel must remain EVA space",
+        )
+
+    def test_crew_moves_to_each_utility_workfront_instead_of_building_at_center(self):
+        site_x, site_y = self.engine.lz_x + 5, self.engine.lz_y + 5
+        site = {
+            "id": "pipe-site", "type": "water_collector",
+            "x": site_x, "y": site_y, "health": 1.0,
+            "under_construction": True, "materials_committed": True,
+            "required_work_hours": 20.0, "work_hours_completed": 2.0,
+            "ticks_remaining": 100, "progress": 0.1,
+            "utility_route_required": True,
+            "utility_route_installed": False,
+            "utility_route_plan": [
+                {"x": site_x, "y": site_y},
+                {"x": site_x + 1, "y": site_y},
+                {"x": site_x + 2, "y": site_y},
+            ],
+            "utility_route_total_segments": 2,
+            "utility_route_segments_completed": 1,
+            "utility_route_work_hours": 4.0,
+            "utility_route_work_hours_completed": 2.0,
+        }
+        self.engine.placed_structures.append(site)
+        self.agent.x, self.agent.y = site_x, site_y
+        self.agent._in_habitat = False
+        self.engine.decision_engine.process_tick = lambda **_kwargs: {
+            "action": "build",
+            "target": {"recipe": "water_collector", "struct_id": site["id"]},
+            "deterministic": True,
+        }
+
+        self.engine._process_agent_tick(self.agent, [], nearby_count=0)
+
+        self.assertEqual((site_x + 1, site_y), (self.agent.x, self.agent.y))
+        self.assertEqual("move", self.agent.action.action_type)
+        self.assertTrue(self.agent.action.target["utility_route_workfront"])
+
+    def test_one_work_parcel_cannot_install_multiple_segments_in_one_tick(self):
+        site_x, site_y = self.engine.lz_x + 5, self.engine.lz_y + 5
+        site = {
+            "id": "progressive-pipe-site", "type": "water_collector",
+            "x": site_x, "y": site_y, "health": 1.0,
+            "under_construction": True, "materials_committed": True,
+            "required_work_hours": 100.0, "work_hours_completed": 0.0,
+            "ticks_remaining": 600, "progress": 0.0,
+            "utility_route_required": True,
+            "utility_route_installed": False,
+            "utility_route_plan": [
+                {"x": site_x, "y": site_y},
+                {"x": site_x + 1, "y": site_y},
+                {"x": site_x + 2, "y": site_y},
+            ],
+            "utility_route_total_segments": 2,
+            "utility_route_segments_completed": 0,
+            "utility_route_work_hours": 0.1,
+            "utility_route_work_hours_completed": 0.0,
+        }
+        self.engine.placed_structures.append(site)
+        self.agent.x, self.agent.y = site_x, site_y
+        self.agent._in_habitat = False
+        self.agent.action.action_type = "build"
+        self.agent.action.target = {
+            "recipe": "water_collector", "struct_id": site["id"]
+        }
+        self.agent.action.ticks_remaining = 100
+
+        self.engine._run_tick()
+
+        self.assertEqual(1, site["utility_route_segments_completed"])
+        self.assertFalse(site["utility_route_installed"])
+        self.assertEqual(
+            (site_x + 1, site_y), self.engine._construction_workfront(site)
+        )
+
+    def test_minor_integrity_wear_keeps_nameplate_capacity(self):
+        self.assertEqual(
+            12.0,
+            self.engine._capacity_with_health([{"health": 0.91}], 12.0),
+        )
+        self.assertEqual(
+            6.0,
+            self.engine._capacity_with_health([{"health": 0.45}], 12.0),
+        )
+
     def test_disconnected_farm_gets_no_crop_duty_but_connected_farm_does(self):
         farm = self.add("greenhouse", "farm", 4, 4)
         decision = self.engine.decision_engine

@@ -3178,7 +3178,11 @@
         }
 
         function drawUtilityNetwork(ctx, network, centerX, centerY, scale, lzX, lzY) {
-            if (!network || !Array.isArray(network.segments) || !network.segments.length) return;
+            if (!network) return;
+            const segments = Array.isArray(network.segments) ? network.segments : [];
+            const constructionSegments = Array.isArray(network.construction_segments)
+                ? network.construction_segments : [];
+            if (!segments.length && !constructionSegments.length) return;
             const powered = network.powered !== false;
             const alpha = powered ? 1.0 : 0.38;
             const toScreen = (x, y) => ({
@@ -3191,11 +3195,29 @@
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
 
+            // Surveyed trench sections appear as exposed earth until their
+            // pressure test and burial are complete. The advancing dashed line
+            // makes the crew's physical pipe-installation work visible.
+            if (constructionSegments.length) {
+                ctx.setLineDash([Math.max(3, 5 * mapZoom), Math.max(2, 3 * mapZoom)]);
+                ctx.strokeStyle = 'rgba(190, 128, 62, 0.9)';
+                ctx.lineWidth = Math.max(4, 7 * mapZoom);
+                constructionSegments.forEach(segment => {
+                    const first = toScreen(segment.x1, segment.y1);
+                    const second = toScreen(segment.x2, segment.y2);
+                    ctx.beginPath();
+                    ctx.moveTo(first.x, first.y);
+                    ctx.lineTo(second.x, second.y);
+                    ctx.stroke();
+                });
+                ctx.setLineDash([]);
+            }
+
             // Compacted backfill / service-way corridor. It is wide enough to
             // remain visible below three isolated circuits at low zoom.
             ctx.strokeStyle = `rgba(27, 25, 22, ${0.78 * alpha})`;
             ctx.lineWidth = Math.max(6, 10 * mapZoom);
-            network.segments.forEach(segment => {
+            segments.forEach(segment => {
                 const first = toScreen(segment.x1, segment.y1);
                 const second = toScreen(segment.x2, segment.y2);
                 ctx.beginPath();
@@ -3209,7 +3231,7 @@
                 { offset: 0, color: `rgba(95, 137, 126, ${0.92 * alpha})` },
                 { offset: 2.6, color: `rgba(190, 203, 207, ${0.92 * alpha})` },
             ];
-            network.segments.forEach(segment => {
+            segments.forEach(segment => {
                 const first = toScreen(segment.x1, segment.y1);
                 const second = toScreen(segment.x2, segment.y2);
                 const horizontal = Math.abs(second.x - first.x) >= Math.abs(second.y - first.y);

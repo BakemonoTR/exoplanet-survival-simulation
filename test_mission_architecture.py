@@ -67,11 +67,11 @@ class MissionProfileTest(unittest.TestCase):
             288.0,
             engine._colony_resources["lander_auxiliary_energy_remaining_kwh"],
         )
-        self.assertEqual(1411, engine.delivered_field_stock[
+        self.assertEqual(1419, engine.delivered_field_stock[
             "structural_truss_section"
         ]["quantity"])
         self.assertEqual(
-            1411,
+            1419,
             engine.central_depot_inventory["structural_truss_section"],
         )
         self.assertEqual(0.0, engine.colony_score.get_overall_score())
@@ -516,7 +516,7 @@ class EngineMissionIntegrationTest(unittest.TestCase):
     def test_fluid_network_plans_finite_multi_vault_capacity(self):
         decision = self.engine.decision_engine
         self.assertEqual(
-            4,
+            5,
             decision._required_physical_structure_count(
                 "life_support_distribution_grid"
             ),
@@ -524,7 +524,7 @@ class EngineMissionIntegrationTest(unittest.TestCase):
         counts = dict(self.engine.structures_built)
         counts["life_support_distribution_grid"] = 1
         self.assertAlmostEqual(
-            0.25,
+            0.2,
             decision._planning_fulfillment(
                 "life_support_distribution_grid", None, counts
             ),
