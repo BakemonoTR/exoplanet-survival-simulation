@@ -8062,6 +8062,9 @@ class DecisionEngine:
         reward: float,
         decay: float = 0.92,
         max_transitions: int = 64,
+        *,
+        reason: str = "episode outcome",
+        components: Optional[dict] = None,
     ) -> int:
         """Back-propagate an episode outcome through recent RL decisions."""
         trace = list(getattr(agent, "rl_episode_trace", []) or [])
@@ -8087,7 +8090,9 @@ class DecisionEngine:
 
         agent.rl_episode_trace.clear()
         agent._rl_transition_pending = False
-        self._record_rl_reward(agent, reward, "episode outcome")
+        self._record_rl_reward(
+            agent, reward, reason, components=components
+        )
         return updated
 
     # ================================================================

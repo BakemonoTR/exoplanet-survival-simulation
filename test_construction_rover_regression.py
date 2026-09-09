@@ -312,8 +312,13 @@ class ConstructionRoverRegressionTest(unittest.TestCase):
         buddy.action.action_type = "sleep"
         buddy.action.target = {"habitat": True, "ticks": 2}
         buddy.action.ticks_remaining = 2
+        buddy._pending_material_pickup = {
+            "action": "craft_item",
+            "target": {"recipe": "stone_hammer"},
+        }
         self.assertTrue(self.engine._start_construction_rover_trip(lead, planned))
         self.assertIsNone(getattr(lead, "_active_expedition", None))
+        self.assertIsNone(buddy._pending_material_pickup)
 
         blocked_actions = []
         for _ in range(40):

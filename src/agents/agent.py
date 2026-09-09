@@ -26,7 +26,7 @@ import numpy as np
 
 
 TACTICAL_POLICY_META_KEY = "__tactical_meta__"
-TACTICAL_STATE_SCHEMA_VERSION = 4
+TACTICAL_STATE_SCHEMA_VERSION = 5
 
 
 class AgentStatus(str, Enum):

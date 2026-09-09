@@ -116,10 +116,10 @@ class MissionContractTests(unittest.TestCase):
         self.assertTrue(ledger["closed"])
         self.assertFalse(ledger["readiness_credit"])
         self.assertAlmostEqual(
-            2_590_866.127, ledger["uncrewed"]["payload_mass_kg"], places=3
+            2_596_086.518, ledger["uncrewed"]["payload_mass_kg"], places=3
         )
         self.assertAlmostEqual(
-            9_133.873, ledger["uncrewed"]["reserve_kg"], places=3
+            3_913.482, ledger["uncrewed"]["reserve_kg"], places=3
         )
         self.assertEqual(
             0.0,

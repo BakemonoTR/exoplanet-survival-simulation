@@ -73,6 +73,73 @@ class PlanetScopedRLTest(unittest.TestCase):
         self.assertLess(agent.q_table["s2"]["build:solar_panel"], 2.0)
         self.assertEqual([], agent.rl_episode_trace)
 
+    def test_colony_score_is_not_broadcast_to_unrelated_tactical_actions(self):
+        engine = SimulationEngine(
+            os.path.join(ROOT, "config", "planets", "kepler-442b.json"),
+            db=False,
+        )
+        agent = create_team_from_presets(
+            os.path.join(ROOT, "config", "agent_presets.json")
+        )[0]
+        agent._in_habitat = True
+        agent.needs.temperature_stress = 50.0
+        agent.needs.hunger = 80.0
+        agent.needs.thirst = 80.0
+
+        before, before_components = engine._tactical_transition_reward(agent)
+        engine.structures_built["habitat_module"] = 9
+        engine._update_colony_score()
+        after, after_components = engine._tactical_transition_reward(agent)
+
+        self.assertEqual(0.0, before)
+        self.assertEqual(0.0, after)
+        self.assertNotIn("colony_progress", before_components)
+        self.assertEqual(before_components, after_components)
+
+    def test_tactical_timeout_credit_distinguishes_near_and_far_attempts(self):
+        def finalize_at(level):
+            engine = SimulationEngine(
+                os.path.join(
+                    ROOT, "config", "planets", "kepler-442b.json"
+                ),
+                db=False,
+                strategic_deadline_learning=True,
+            )
+            agent = create_team_from_presets(
+                os.path.join(ROOT, "config", "agent_presets.json")
+            )[0]
+            engine.add_agent(agent)
+            for category, config in engine.colony_score._targets.items():
+                engine.colony_score._current[category] = (
+                    float(config["target"]) * level
+                )
+            engine.colony_score._communications_ready = True
+            engine._strategy_deadline_readiness = level
+            agent.q_table = {"state": {"continue_duty:overtime": 0.0}}
+            agent.rl_episode_trace = [
+                ("state", "continue_duty:overtime")
+            ]
+            engine.end_reason = "timeout"
+            engine._finalize_terminal_learning()
+            return (
+                engine._tactical_terminal_outcome["reward"],
+                agent.q_table["state"]["continue_duty:overtime"],
+                agent.rl_reward_history[-1],
+            )
+
+        near_reward, near_q, near_history = finalize_at(0.94)
+        far_reward, far_q, _ = finalize_at(0.62)
+
+        self.assertLess(near_reward, 0.0)
+        self.assertGreater(near_reward, far_reward)
+        self.assertGreater(near_q, far_q)
+        self.assertEqual(
+            "shaped team mission outcome", near_history["reason"]
+        )
+        self.assertIn(
+            "weakest_category", near_history["components"]
+        )
+
     def test_dialogue_and_reflection_are_opt_in_for_headless_runs(self):
         engine = SimulationEngine(
             os.path.join(ROOT, "config", "planets", "kepler-442b.json"),

@@ -359,6 +359,7 @@ class SimulationEngine:
         self._strategic_policy_loaded = False
         self._terminal_reward_applied = False
         self._terminal_learning_finalized = False
+        self._tactical_terminal_outcome: dict = {}
         # Consecutive ticks for which every operational arrival gate remains
         # valid. Any outage resets this qualification run.
         self._support_soak_ticks = 0
@@ -7558,6 +7559,14 @@ class SimulationEngine:
             self._construction_sortie = reservation
             for member in (agent, buddy):
                 member._construction_preparation = reservation
+                # A material pickup is only a reversible route request; no
+                # stock is removed until the worker reaches storage.  Once
+                # this person accepts the fixed construction crew assignment,
+                # that old request must not replace their bunk/preflight MOVE
+                # in _material_pickup_decision.  Otherwise a tired builder
+                # can alternate forever between the berth and storage while
+                # the rover and on-site assembly robots remain reserved.
+                member._pending_material_pickup = None
                 # An old planning-room visit may not replace this mission.
                 pending = getattr(member, "_pending_indoor_activity", None)
                 if pending and pending.get("action") == "plan_construction":
@@ -9203,12 +9212,9 @@ class SimulationEngine:
                         break
         
         # 3. UPDATE COLONY SCORE & REINFORCEMENT LEARNING REWARD SIGNAL
-        prev_score = getattr(self, "_last_colony_score", 0.0)
         current_score = self._update_colony_score()
         self.colony_score.record_tick(self.current_tick)
         tick_events["colony_score"] = current_score
-        score_delta = current_score - prev_score
-        self._last_colony_score = current_score
 
         strategy_reward = self.strategic_policy.observe_completion(
             structures_built=self.structures_built,
@@ -9231,31 +9237,16 @@ class SimulationEngine:
             # penalties to accumulate into values such as -1500.
             if not getattr(agent, "_rl_transition_pending", False):
                 continue
-            # Macro strategic reward from colony progress
-            progress_reward = max(-5.0, min(5.0, score_delta * 20.0))
-            acute_hazard_reward = 0.0
-            outdoor_cold_reward = 0.0
-            rl_reward = progress_reward
-            
-            # Never reward the label of a repeated build/refine/gather tick.
-            # Physical completions already issue delayed rewards at their
-            # audited event sites, while capacity gain is represented by the
-            # score delta above.  This prevents reward farming without output.
+            # Colony score is a shared, delayed result. Broadcasting its
+            # delta to every pending decision taught unrelated sleep, watch and
+            # movement choices that they had produced somebody else's module.
+            # Tactical credit is now limited to this agent's observed physical
+            # outcomes; the shared strategic policy owns capacity progress.
+            rl_reward, reward_components = (
+                self._tactical_transition_reward(agent)
+            )
 
             # Survival vitals & thermal reward balance
-            temp = getattr(agent.needs, "temperature_stress", 50.0)
-            # Being healthy is a constraint, not a repeatable reward source.
-            # Physical output/completion and terminal survival supply rewards;
-            # waiting or reselecting sleep must not farm a healthy-state bonus.
-            if temp < 30 or agent.needs.hunger < 15 or agent.needs.thirst < 15:
-                acute_hazard_reward = -3.0
-                rl_reward += acute_hazard_reward
-                
-            # Outdoor cold penalty (learning to not loiter far outside at freezing night)
-            if not getattr(agent, "_in_habitat", False) and temp < 40:
-                outdoor_cold_reward = -1.5
-                rl_reward += outdoor_cold_reward
-                
             colony_mats = {}
             for other in self.agents:
                 for k, v in other.inventory.materials.items():
@@ -9273,12 +9264,8 @@ class SimulationEngine:
                 agent,
                 rl_reward,
                 next_state_key,
-                reason="colony progress and survival",
-                components={
-                    "colony_progress": progress_reward,
-                    "acute_hazard": acute_hazard_reward,
-                    "outdoor_cold": outdoor_cold_reward,
-                },
+                reason="causal tactical outcome",
+                components=reward_components,
             )
             agent._rl_transition_pending = False
             
@@ -17481,6 +17468,111 @@ class SimulationEngine:
     # END CONDITIONS
     # ================================================================
 
+    def _tactical_transition_reward(
+        self, agent: Agent
+    ) -> tuple[float, dict[str, float]]:
+        """Return only consequences causally observable for this decision.
+
+        Capacity gains are delayed team outcomes owned by the shared strategic
+        policy. Physical gather, fabrication, deposit, rescue and movement
+        outcomes are credited at their audited completion sites.
+        """
+        acute_hazard_reward = 0.0
+        outdoor_cold_reward = 0.0
+        temp = float(getattr(
+            agent.needs, "temperature_stress", 50.0
+        ))
+        if (
+            temp < 30.0
+            or float(agent.needs.hunger) < 15.0
+            or float(agent.needs.thirst) < 15.0
+        ):
+            acute_hazard_reward = -3.0
+        if (
+            not getattr(agent, "_in_habitat", False)
+            and temp < 40.0
+        ):
+            outdoor_cold_reward = -1.5
+        components = {
+            "acute_hazard": acute_hazard_reward,
+            "outdoor_cold": outdoor_cold_reward,
+        }
+        return sum(components.values()), components
+
+    def _tactical_terminal_credit(
+        self, outcome: str
+    ) -> Optional[dict]:
+        """Scale team credit by measured readiness without granting success."""
+        outcome = str(outcome)
+        if (
+            outcome == "manual_stop"
+            or bool(getattr(
+                self.strategic_policy, "evaluation_mode", False
+            ))
+        ):
+            return None
+        if outcome == "colony_ready":
+            return {"outcome": outcome, "reward": 50.0}
+        if outcome == "all_agents_dead":
+            return {"outcome": outcome, "reward": -50.0}
+        if outcome not in {"timeout", "stagnation"}:
+            return None
+
+        def unit(value: float) -> float:
+            return max(0.0, min(1.0, float(value)))
+
+        category_names = (
+            "energy", "o2", "water", "food",
+            "shelter", "hazard_protection",
+        )
+        scores = self.colony_score.get_scores()
+        categories = [
+            unit(scores.get(name, 0.0)) for name in category_names
+        ]
+        category_average = sum(categories) / len(categories)
+        weakest_category = min(categories)
+        deadline_readiness = unit(self._strategy_deadline_readiness)
+        required_soak_ticks = max(
+            1,
+            int(self._mission_state()["support_soak"]["required_ticks"]),
+        )
+        support_soak_fraction = unit(
+            self._support_soak_ticks / required_soak_ticks
+        )
+        surviving_crew_fraction = unit(
+            sum(
+                getattr(crew.status, "value", str(crew.status)) != "dead"
+                for crew in self.agents
+            )
+            / max(1, len(self.agents))
+        )
+
+        # This is the half-scale counterpart of the shared strategic outcome:
+        # average readiness rewards broad progress, the weakest category stops
+        # surplus in one system from hiding another, and deadline/soak credit
+        # records how close the attempt came to actual civilian acceptance.
+        base_penalty = -30.0 if outcome == "timeout" else -32.5
+        readiness_credit = surviving_crew_fraction * (
+            15.0 * category_average
+            + 10.0 * weakest_category
+            + 2.5 * deadline_readiness
+            + 2.5 * support_soak_fraction
+        )
+        reward = min(0.0, base_penalty + readiness_credit)
+        return {
+            "outcome": outcome,
+            "reward": round(reward, 4),
+            "category_average": round(category_average, 4),
+            "weakest_category": round(weakest_category, 4),
+            "deadline_readiness": round(deadline_readiness, 4),
+            "support_soak_fraction": round(
+                support_soak_fraction, 4
+            ),
+            "surviving_crew_fraction": round(
+                surviving_crew_fraction, 4
+            ),
+        }
+
     def _finalize_terminal_learning(self) -> None:
         """Apply one auditable episode outcome and persist its policies."""
         if self._terminal_learning_finalized or self.end_reason == "running":
@@ -17505,13 +17597,18 @@ class SimulationEngine:
                 ) / max(1, len(self.agents))),
             )
 
-            individual_reward = {
-                "colony_ready": 50.0,
-                "timeout": -20.0,
-                "stagnation": -25.0,
-                "all_agents_dead": -50.0,
-            }.get(outcome)
-            if individual_reward is not None:
+            tactical_credit = self._tactical_terminal_credit(outcome)
+            self._tactical_terminal_outcome = dict(
+                tactical_credit
+                or {"outcome": outcome, "reward": None}
+            )
+            if tactical_credit is not None:
+                individual_reward = float(tactical_credit["reward"])
+                reward_components = {
+                    key: value
+                    for key, value in tactical_credit.items()
+                    if key not in {"outcome", "reward"}
+                }
                 for crew in self.agents:
                     if (
                         outcome != "all_agents_dead"
@@ -17520,7 +17617,10 @@ class SimulationEngine:
                     ):
                         continue
                     self.decision_engine.apply_terminal_rl_reward(
-                        crew, individual_reward
+                        crew,
+                        individual_reward,
+                        reason="shaped team mission outcome",
+                        components=reward_components,
                     )
             self._terminal_reward_applied = True
 
@@ -17707,6 +17807,15 @@ class SimulationEngine:
             # Backend research telemetry; the challenge UI remains intentionally
             # deferred until the learning protocol is validated.
             "strategic_rl": self.strategic_policy.telemetry(),
+            "tactical_rl": {
+                "credit_model": (
+                    "verified physical outcomes plus shaped team outcome"
+                ),
+                "global_score_broadcast": False,
+                "terminal_outcome": dict(
+                    self._tactical_terminal_outcome
+                ),
+            },
             "movement_effort_rl": dict(self._movement_effort_telemetry),
             "surface_mobility": {
                 "routine_nominal_cells_per_tick": self.EVA_WALK_SPEED_CELLS,
@@ -17890,6 +17999,15 @@ class SimulationEngine:
             },
             "colony_score": self.colony_score.to_dict(),
             "strategic_rl": self.strategic_policy.telemetry(),
+            "tactical_rl": {
+                "credit_model": (
+                    "verified physical outcomes plus shaped team outcome"
+                ),
+                "global_score_broadcast": False,
+                "terminal_outcome": dict(
+                    self._tactical_terminal_outcome
+                ),
+            },
             "movement_effort_rl": dict(self._movement_effort_telemetry),
             "surface_mobility": {
                 "routine_nominal_cells_per_tick": self.EVA_WALK_SPEED_CELLS,
