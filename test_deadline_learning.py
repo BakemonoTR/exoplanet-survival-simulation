@@ -80,8 +80,62 @@ class DeadlineLearningTest(unittest.TestCase):
         policy.episode_trace = [('state', 'capacity:solar_panel')]
         policy.finish_episode('timeout')
         self.assertEqual(before, policy.q_table)
+        operational_before = (
+            policy.operational_decision_count,
+            dict(policy.operational_action_counts),
+        )
+        local = policy.choose_operational_action(
+            "frozen-operation", ("pace:steady", "pace:surge")
+        )
+        self.assertIn(local["action_key"], {"pace:steady", "pace:surge"})
+        self.assertEqual(
+            operational_before,
+            (
+                policy.operational_decision_count,
+                policy.operational_action_counts,
+            ),
+        )
+        self.assertNotIn("frozen-operation", policy.operational_q_table)
         self.assertEqual(0, policy.epsilon)
         self.assertEqual(0, policy.attempt_count)
+
+    def test_shared_operational_policy_round_trips_without_terminal_broadcast(self):
+        policy = ColonyStrategicPolicy('planet', deadline_learning=True)
+        state = ('shop-effort-v1|activity:machine_release|'
+                 'distance:near|energy:fresh|backlog:many')
+        trace_before = list(policy.episode_trace)
+
+        selected = policy.choose_operational_action(
+            state, ('shop_pace:surge', 'shop_pace:steady')
+        )
+        self.assertIn(selected['action_key'], {
+            'shop_pace:surge', 'shop_pace:steady'
+        })
+        self.assertEqual(trace_before, policy.episode_trace)
+        self.assertTrue(policy.observe_operational_outcome(
+            state, 'shop_pace:surge', 4.0,
+            components={'result': 'machine_released'},
+        ))
+        learned = copy.deepcopy(policy.operational_q_table)
+        self.assertGreater(learned[state]['shop_pace:surge'], 0.0)
+
+        # A mission terminal reward updates only capacity decisions. Local
+        # measured shop credit must remain unchanged.
+        policy.finish_episode('timeout', category_scores={k: .8 for k in CATEGORIES})
+        self.assertEqual(learned, policy.operational_q_table)
+
+        restored = ColonyStrategicPolicy(
+            'planet', deadline_learning=True, q_table=policy.dump()
+        )
+        self.assertEqual(policy.operational_q_table, restored.operational_q_table)
+        self.assertEqual(
+            policy.operational_outcome_count,
+            restored.operational_outcome_count,
+        )
+        self.assertEqual(
+            policy.operational_action_counts,
+            restored.operational_action_counts,
+        )
 
     def test_experimental_engine_cannot_overwrite_legacy_strategy(self):
         with tempfile.TemporaryDirectory() as directory:

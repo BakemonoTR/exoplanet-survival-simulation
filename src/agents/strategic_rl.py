@@ -188,6 +188,17 @@ class ColonyStrategicPolicy:
         self.exploration_age = 0
         self.total_reward = 0.0
         self.decision_count = 0
+        # Short-horizon operational choices are learned by one colony-wide
+        # contextual bandit. Six separate crew tables made identical shop
+        # states sparse and gave each astronaut too little experience. Keep
+        # these rows separate from capacity Q-values so the terminal mission
+        # reward cannot overwrite measured scheduling outcomes.
+        self.operational_q_table: dict[str, dict[str, float]] = {}
+        self.operational_decision_count = 0
+        self.operational_outcome_count = 0
+        self.operational_total_reward = 0.0
+        self.operational_action_counts: dict[str, int] = {}
+        self.operational_last_outcome: Optional[dict] = None
         self.commitment: Optional[StrategyCommitment] = None
         self.episode_trace: list[tuple[str, str]] = []
         self.episode_capacity_high_water: dict[str, int] = {}
@@ -209,6 +220,18 @@ class ColonyStrategicPolicy:
             self.minimum_epsilon,
             self.initial_epsilon
             * (self.epsilon_decay_per_attempt ** self.exploration_age),
+        )
+
+    @property
+    def operational_epsilon(self) -> float:
+        """Exploration rate for high-frequency shared operational choices."""
+        if self.evaluation_mode:
+            return 0.0
+        # Operational decisions receive hundreds of outcomes per mission, so
+        # decay by settled samples rather than by the slower episode age.
+        return max(
+            0.05,
+            0.30 * (0.90 ** (self.operational_outcome_count // 512)),
         )
 
     def expected_completion_ticks(self, recipe: str, fallback: int) -> int:
@@ -234,6 +257,88 @@ class ColonyStrategicPolicy:
     @staticmethod
     def action_key(recipe: str) -> str:
         return f"capacity:{recipe}"
+
+    def choose_operational_action(
+        self,
+        state_key: str,
+        candidate_actions: Iterable[str],
+        *,
+        initial_q: float = 0.0,
+    ) -> Optional[dict]:
+        """Choose a repeated colony operation without touching strategy trace.
+
+        This is a contextual bandit: its outcome is a directly measured local
+        result, such as time to release a finished machine. It deliberately
+        receives no colony-score or episode-terminal broadcast.
+        """
+        choices = sorted({str(action) for action in candidate_actions if action})
+        if not choices:
+            return None
+        if self.evaluation_mode:
+            row = dict(self.operational_q_table.get(str(state_key), {}))
+        else:
+            row = self.operational_q_table.setdefault(str(state_key), {})
+            for action in choices:
+                row.setdefault(action, float(initial_q))
+
+        material = (
+            f"operational|{self.planet_id}|{self.seed}|{self.attempt_count}|"
+            f"{self.operational_decision_count}|{state_key}"
+        )
+        digest = hashlib.sha256(material.encode("utf-8")).digest()
+        rng = random.Random(int.from_bytes(digest[:8], "big"))
+        exploring = rng.random() < self.operational_epsilon
+        if exploring:
+            selected = rng.choice(choices)
+        else:
+            best_value = max(float(row.get(action, initial_q)) for action in choices)
+            tied = [
+                action for action in choices
+                if float(row.get(action, initial_q)) == best_value
+            ]
+            selected = rng.choice(tied)
+
+        if not self.evaluation_mode:
+            self.operational_decision_count += 1
+            self.operational_action_counts[selected] = (
+                int(self.operational_action_counts.get(selected, 0)) + 1
+            )
+        return {
+            "state_key": str(state_key),
+            "action_key": selected,
+            "q_value": round(float(row.get(selected, initial_q)), 4),
+            "exploring": exploring,
+            "epsilon": round(self.operational_epsilon, 4),
+        }
+
+    def observe_operational_outcome(
+        self,
+        state_key: str,
+        action_key: str,
+        reward: float,
+        *,
+        components: Optional[dict] = None,
+    ) -> bool:
+        """Update one shared operational row from a completed physical result."""
+        if self.evaluation_mode or not state_key or not action_key:
+            return False
+        row = self.operational_q_table.setdefault(str(state_key), {})
+        old = float(row.get(str(action_key), 0.0))
+        reward = float(reward)
+        row[str(action_key)] = round(
+            old + self.learning_rate * (reward - old), 4
+        )
+        self.operational_outcome_count += 1
+        self.operational_total_reward += reward
+        self.operational_last_outcome = {
+            "state_key": str(state_key),
+            "action_key": str(action_key),
+            "reward": round(reward, 4),
+            "q_before": round(old, 4),
+            "q_after": row[str(action_key)],
+            "components": dict(components or {}),
+        }
+        return True
 
     def _learning_state_key(self, observation: str) -> str:
         """Generalize only the opt-in table while retaining the audited state.
@@ -1062,6 +1167,23 @@ class ColonyStrategicPolicy:
             "exploration_age": int(self.exploration_age),
             "total_reward": round(float(self.total_reward), 6),
             "decision_count": int(self.decision_count),
+            "operational_q_table": {
+                state: dict(actions)
+                for state, actions in self.operational_q_table.items()
+            },
+            "operational_decision_count": int(
+                self.operational_decision_count
+            ),
+            "operational_outcome_count": int(
+                self.operational_outcome_count
+            ),
+            "operational_total_reward": round(
+                float(self.operational_total_reward), 6
+            ),
+            "operational_action_counts": {
+                action: int(count)
+                for action, count in self.operational_action_counts.items()
+            },
             "observed_completion_ticks": {
                 recipe: {
                     "count": int(stats.get("count", 0)),
@@ -1086,6 +1208,12 @@ class ColonyStrategicPolicy:
             self.exploration_age = 0
             self.total_reward = 0.0
             self.decision_count = 0
+            self.operational_q_table = {}
+            self.operational_decision_count = 0
+            self.operational_outcome_count = 0
+            self.operational_total_reward = 0.0
+            self.operational_action_counts = {}
+            self.operational_last_outcome = None
             self.last_outcome = {
                 "type": "incompatible_state_schema_reset",
                 "loaded_version": metadata.get("state_schema_version"),
@@ -1106,6 +1234,32 @@ class ColonyStrategicPolicy:
         )
         self.total_reward = float(metadata.get("total_reward", 0.0))
         self.decision_count = max(0, int(metadata.get("decision_count", 0)))
+        self.operational_q_table = {
+            str(state): {
+                str(action): float(value)
+                for action, value in dict(actions).items()
+            }
+            for state, actions in dict(
+                metadata.get("operational_q_table", {}) or {}
+            ).items()
+            if isinstance(actions, dict)
+        }
+        self.operational_decision_count = max(
+            0, int(metadata.get("operational_decision_count", 0))
+        )
+        self.operational_outcome_count = max(
+            0, int(metadata.get("operational_outcome_count", 0))
+        )
+        self.operational_total_reward = float(
+            metadata.get("operational_total_reward", 0.0)
+        )
+        self.operational_action_counts = {
+            str(action): max(0, int(count))
+            for action, count in dict(
+                metadata.get("operational_action_counts", {}) or {}
+            ).items()
+        }
+        self.operational_last_outcome = None
         self.observed_completion_ticks = {}
         for recipe, raw_stats in dict(
             metadata.get("observed_completion_ticks", {}) or {}
@@ -1132,6 +1286,20 @@ class ColonyStrategicPolicy:
             "epsilon": round(self.epsilon, 4),
             "learned_states": len(self.q_table),
             "total_reward": round(self.total_reward, 3),
+            "operational_epsilon": round(self.operational_epsilon, 4),
+            "operational_learned_states": len(self.operational_q_table),
+            "operational_decisions": self.operational_decision_count,
+            "operational_outcomes": self.operational_outcome_count,
+            "operational_total_reward": round(
+                self.operational_total_reward, 3
+            ),
+            "operational_action_counts": dict(
+                self.operational_action_counts
+            ),
+            "operational_last_outcome": (
+                dict(self.operational_last_outcome)
+                if self.operational_last_outcome else None
+            ),
             "current_objective": current.recipe if current else None,
             "current_action": current.action_key if current else None,
             "last_outcome": dict(self.last_outcome) if self.last_outcome else None,

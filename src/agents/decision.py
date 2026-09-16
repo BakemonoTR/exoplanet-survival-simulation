@@ -245,6 +245,7 @@ class DecisionEngine:
             )
         }
         self.severe_radiation_environment = False
+        self._queued_construction_supply: dict = {}
 
         recipes_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -298,6 +299,22 @@ class DecisionEngine:
             and agent.needs.energy < max(72.0, float(t.get("required_energy_pct", 72.0)))
             for t in targets
         )
+
+    @staticmethod
+    def manufacturing_vitals_ready(agent, tick, duty_ticks=1, shift_ticks=78):
+        """Shared physiological mask for planning and executing workshop duty."""
+        if getattr(agent.status, "value", str(agent.status)) in {"dead", "incapacitated"}:
+            return False
+        needs = agent.needs
+        duty_ticks = min(max(1, int(duty_ticks)), int(shift_ticks))
+        overtime_active = tick <= int(getattr(agent, "_fatigue_overtime_until_tick", -1))
+        energy_floor = (min(45.0, 15.0 + duty_ticks * 0.35) if overtime_active
+                        else min(96.0, 65.0 + duty_ticks * 0.4))
+        return (needs.energy > energy_floor
+                and needs.hunger > min(60.0, 35.0 + duty_ticks * 0.25)
+                and needs.thirst > min(70.0, 45.0 + duty_ticks * 0.25)
+                and 42.0 < needs.temperature_stress < 88.0
+                and (bool(getattr(agent, "_in_habitat", False)) or needs.o2_supply > 40.0))
 
     def select_sar_rescuer_id(self, victim: Agent, agents: list[Agent] = None) -> Optional[str]:
         """Select one conscious, medically fit SAR lead for a victim."""
@@ -485,7 +502,7 @@ class DecisionEngine:
         pooled: Optional[dict] = None,
         structures_built: Optional[dict] = None,
     ) -> dict[str, int]:
-        """Hide delivered structure-kit stock from every other recipe.
+        """Hide physically reserved kit stock from every other recipe.
 
         The physical kit remains visible in central-depot telemetry.  Its BOM is
         therefore already present in ``pooled`` and must not be added twice.
@@ -505,39 +522,37 @@ class DecisionEngine:
             if structures_built is None else structures_built
         )
         kits = getattr(self, "delivered_structure_kits", {})
-        if not isinstance(kits, dict):
-            return available
-        for kit_recipe, kit in kits.items():
-            if (
-                kit_recipe == recipe_name
-                or int(built.get(kit_recipe, 0)) > 0
-                or not isinstance(kit, dict)
-                or kit.get("consumed", False)
-            ):
-                continue
-            kit_materials = kit.get("materials", kit)
-            if not isinstance(kit_materials, dict):
-                continue
-            numeric_kit_materials = {
-                material: int(quantity)
-                for material, quantity in kit_materials.items()
-                if material not in {"consumed", "reserved", "kit_id"}
-                and isinstance(quantity, (int, float))
-                and quantity > 0
-            }
-            # Reservation metadata cannot claim unrelated replacement stock
-            # after a kit has physically ceased to be complete (legacy saves,
-            # test fixtures or damage recovery). In normal operation the
-            # engine's atomic reservation prevents this condition entirely.
-            if not all(
-                int(available.get(material, 0)) >= quantity
-                for material, quantity in numeric_kit_materials.items()
-            ):
-                continue
-            for material, quantity in numeric_kit_materials.items():
-                available[material] = max(
-                    0, int(available.get(material, 0)) - quantity
-                )
+        if isinstance(kits, dict):
+            for kit_recipe, kit in kits.items():
+                if (
+                    kit_recipe == recipe_name
+                    or int(built.get(kit_recipe, 0)) > 0
+                    or not isinstance(kit, dict)
+                    or kit.get("consumed", False)
+                ):
+                    continue
+                kit_materials = kit.get("materials", kit)
+                if not isinstance(kit_materials, dict):
+                    continue
+                numeric_kit_materials = {
+                    material: int(quantity)
+                    for material, quantity in kit_materials.items()
+                    if material not in {"consumed", "reserved", "kit_id"}
+                    and isinstance(quantity, (int, float))
+                    and quantity > 0
+                }
+                # Reservation metadata cannot claim unrelated replacement
+                # stock after a kit has physically ceased to be complete.
+                if not all(
+                    int(available.get(material, 0)) >= quantity
+                    for material, quantity in numeric_kit_materials.items()
+                ):
+                    continue
+                for material, quantity in numeric_kit_materials.items():
+                    available[material] = max(
+                        0, int(available.get(material, 0)) - quantity
+                    )
+
         return available
 
     def _all_machine_slots_busy(
@@ -1885,14 +1900,22 @@ class DecisionEngine:
             candidate["actionable"] = bool(
                 feasibility["actionable"] and deadline_feasible
             )
-            # A commitment is reviewed after three days without any measured
-            # BOM/site progress, and after seven days without a delivered
-            # module even if intermediate stock is still improving.
-            candidate["stall_timeout_ticks"] = ticks_for_minutes(
+            # A commitment is released after three days without measured
+            # BOM/site progress.  A progressing job gets its conservative
+            # measured/planned module latency plus that watchdog window before
+            # the broader review can rotate it.  The previous fixed seven-day
+            # review contradicted the same forecast above: a habitat planned
+            # for ten days was routinely abandoned on day seven.
+            stall_timeout_ticks = ticks_for_minutes(
                 3.0 * 1440.0, self.tick_minutes
             )
+            candidate["stall_timeout_ticks"] = stall_timeout_ticks
             candidate["replan_interval_ticks"] = ticks_for_minutes(
                 7.0 * 1440.0, self.tick_minutes
+            )
+            candidate["replan_interval_ticks"] = max(
+                candidate["replan_interval_ticks"],
+                planning_completion_ticks + stall_timeout_ticks,
             )
 
         policy = getattr(self, "strategic_policy", None)
@@ -2301,20 +2324,28 @@ class DecisionEngine:
             deficits, recipe_name, pooled
         )
         if not ranked:
-            # The immediate BOM may be staged while the machine is occupied.
-            # Derive a small reserve target from this recipe's configured raw
-            # graph instead of falling back to a hard-coded material table.
+            # Missing finished parts are a fabrication debt, not permission
+            # to excavate forever. Hold one additional full raw BOM as a
+            # bounded contingency; never order more above that stock floor.
             configured_raw = self._raw_bom_deficits(recipe_name, {})
-            ranked = sorted(
-                configured_raw,
-                key=lambda resource: (
-                    int(pooled.get(resource, 0)),
-                    -int(configured_raw.get(resource, 0)),
-                    resource,
-                ),
-            )
+            reserve_deficits = {
+                resource: max(0, 2 * int(quantity) - int(pooled.get(resource, 0)))
+                for resource, quantity in configured_raw.items()
+            }
+            deficits = {k: v for k, v in reserve_deficits.items() if v > 0}
+            ranked = sorted(deficits, key=lambda resource: (
+                int(pooled.get(resource, 0)), -deficits[resource], resource,
+            ))
         if not ranked:
-            ranked = ["iron_ore"]
+            return {
+                "action": "stand_watch",
+                "target": {"operations_watch": True,
+                           "shared_work_order": True, "capacity_recipe": recipe_name,
+                           "raw_stock_sufficient": True,
+                           "ticks": max(1, ticks_for_minutes(30.0, self.tick_minutes))},
+                "reasoning": "Raw BOM and contingency are staged; awaiting fabrication capacity",
+                "deterministic": True,
+            }
 
         claims = self._active_raw_campaign_claims(
             recipe_name,
@@ -2788,7 +2819,24 @@ class DecisionEngine:
             quantity > 0 and material in dependency_materials
             for material, quantity in agent.inventory.materials.items()
         )
+        direct_feed_output = None
         if useful_carried:
+            # A finished intermediate already in this worker's hands can go
+            # straight to the next real workshop. Do not force a depot round
+            # trip when the entire next batch is physically being carried.
+            feed_pool = dict(pooled)
+            for material, quantity in self._contract_reservations(recipe_name, agent, tick).items():
+                feed_pool[material] = feed_pool.get(material, 0) + quantity
+            feed_options = self._executable_refine_support_actions(
+                self._shared_dependency_actions(recipe_name, feed_pool),
+                agent, living, dict(agent.inventory.materials), tick=tick,
+            )
+            if feed_options:
+                direct_feed_output = feed_options[0]["target"]["output"]
+                if max(abs(agent.x - lz_x), abs(agent.y - lz_y)) > 1:
+                    for material, quantity in agent.inventory.materials.items():
+                        staged[material] = staged.get(material, 0) + quantity
+        if useful_carried and direct_feed_output is None:
             self._record_shared_supply_assignment(
                 agent=agent,
                 action="stage_materials",
@@ -2813,7 +2861,7 @@ class DecisionEngine:
                 "deterministic": True,
             }
 
-        contract = getattr(agent, "_shared_work_contract", None)
+        contract = None if direct_feed_output else getattr(agent, "_shared_work_contract", None)
         if isinstance(contract, dict):
             contract_released_for_replan = False
             same_recipe = contract.get("recipe") == recipe_name
@@ -3081,6 +3129,9 @@ class DecisionEngine:
         executable_refines = self._executable_refine_support_actions(
             support_actions, agent, living, staged, tick=tick
         )
+        if direct_feed_output:
+            executable_refines = [option for option in executable_refines
+                                  if option.get("target", {}).get("output") == direct_feed_output]
         if executable_refines:
             # Keep each real machine fed while the remaining crew prospect and
             # recover distinct raw bottlenecks in parallel.
@@ -3240,6 +3291,118 @@ class DecisionEngine:
         )
         return chosen
 
+    def _available_for_local_construction(
+        self, crew: Agent, site: dict
+    ) -> bool:
+        """Return whether a crew member can take a local site shift now."""
+        expedition = getattr(crew, "_active_expedition", None)
+        if isinstance(expedition, dict):
+            # A rover pair owns its work front until both return; temporary
+            # field self-care must not dispatch a third person on foot.
+            return (
+                expedition.get("kind") == "construction_support"
+                and expedition.get("site_id") == site.get("id")
+            )
+        if any(isinstance(getattr(crew, attr, None), dict) for attr in (
+            "_pending_expedition",
+            "_expedition_buddy_reservation",
+            "_detected_resource_recovery",
+            "_construction_preparation",
+        )):
+            return False
+
+        action_type = str(getattr(crew.action, "action_type", "") or "")
+        if action_type in {
+            "sleep", "medical_rest", "eat", "drink", "refill_o2",
+            "service_suit", "refine", "craft", "operate_machine",
+            "repair", "treat", "rescue",
+        }:
+            return False
+        # A worker already inside a physical multi-tick task cannot answer a
+        # shift call until that task reaches a safe boundary. Grid movement is
+        # replanned every tick, so an ordinary upstream supply route can be
+        # redirected without erasing work or teleporting the astronaut.
+        if (
+            int(getattr(crew.action, "ticks_remaining", 0)) > 0
+            and action_type not in {
+                "idle", "move", "explore", "arrived", "build", "stand_watch"
+            }
+        ):
+            return False
+        if isinstance(getattr(crew, "_paused_manufacturing", None), dict):
+            return False
+        target = (
+            crew.action.target
+            if isinstance(getattr(crew.action, "target", None), dict)
+            else {}
+        )
+        if (
+            target.get("maintenance")
+            or target.get("expedition")
+            or target.get("medical_response")
+            or target.get("resume_machine_cycle")
+            or target.get("o2_service")
+            or target.get("forced_return")
+            or target.get("fatigue_return")
+            or target.get("awaiting_expedition_member")
+            or target.get("expedition_buddy_standby")
+            or target.get("survey_action")
+            or target.get("destination") in {
+                "shelter", "habitat", "decontamination",
+                "pressurized_recovery", "manufacturing_machine",
+                "o2_filling_station",
+            }
+        ):
+            return False
+        # This is availability for a local work assignment, not an EVA
+        # certificate. A worn suit must still receive the order so the engine's
+        # physical service gate can route its owner through the real rack.
+        if crew.needs.energy < 65.0:
+            return False
+        if crew.needs.thirst <= 30.0 or crew.needs.hunger <= 25.0:
+            return False
+        return True
+
+    def _assigned_local_construction_site(
+        self, agent: Agent
+    ) -> Optional[dict]:
+        """Resolve an immediately actionable local construction shift."""
+        order = getattr(self, "shared_work_order", {})
+        shift_crew_ids = list(order.get("construction_shift_crew_ids", []))
+        if not shift_crew_ids:
+            # Compatibility with an in-flight save/order created before the
+            # explicit minimum-shift field existed.
+            shift_crew_ids = list(order.get("assignments", {}))[:1]
+        if (
+            order.get("stage") != "construction"
+            or order.get("assignments", {}).get(agent.id) != "construction"
+            or agent.id not in shift_crew_ids
+        ):
+            return None
+        site_id = order.get("site_id")
+        site = next((
+            structure
+            for structure in getattr(self, "placed_structures", [])
+            if structure.get("id") == site_id
+            and structure.get("under_construction", False)
+            and structure.get("materials_committed", True)
+            and not structure.get("destroyed", False)
+        ), None)
+        if site is None or not self._available_for_local_construction(agent, site):
+            return None
+        lz_x = int(getattr(self, "lz_x", site.get("x", 0)))
+        lz_y = int(getattr(self, "lz_y", site.get("y", 0)))
+        rover_min_distance = int(getattr(
+            self, "crew_rover_min_distance_cells", 12
+        ))
+        if (
+            abs(int(site.get("x", lz_x)) - lz_x)
+            + abs(int(site.get("y", lz_y)) - lz_y)
+            >= rover_min_distance
+        ):
+            return None
+        return site
+
     def _shared_colony_work_decision(
         self, agent: Agent, tick: int, structures_built: dict
     ) -> Optional[dict]:
@@ -3368,31 +3531,7 @@ class DecisionEngine:
                 primary_ids.add(crew.id)
 
             def available_for_site(crew: Agent) -> bool:
-                expedition = getattr(crew, "_active_expedition", None)
-                if isinstance(expedition, dict):
-                    # A rover pair owns its work front until both return;
-                    # temporary field drinking must not dispatch a third walker.
-                    return (
-                        expedition.get("kind") == "construction_support"
-                        and expedition.get("site_id") == site.get("id")
-                    )
-                action_type = str(getattr(crew.action, "action_type", "") or "")
-                if action_type in {
-                    "sleep", "medical_rest", "eat", "drink", "refill_o2",
-                    "service_suit", "refine", "craft", "operate_machine",
-                }:
-                    return False
-                if isinstance(getattr(crew, "_active_expedition", None), dict):
-                    return False
-                # This is availability for a local work assignment, not an
-                # EVA certificate. Do not filter out a worn suit here: its
-                # owner must receive the order to reach the real service gate.
-                # Remote paired preparation is handled separately below.
-                if crew.needs.energy < 65.0:
-                    return False
-                if crew.needs.thirst <= 30.0 or crew.needs.hunger <= 25.0:
-                    return False
-                return True
+                return self._available_for_local_construction(crew, site)
 
             # Primary owners keep the work contract, while rested teammates
             # cover their sleep/self-care periods. This is a real shift handoff:
@@ -3433,11 +3572,24 @@ class DecisionEngine:
             assignments = {}
             for crew in assigned:
                 assignments[crew.id] = "construction"
+            # Guarantee one live supervisor while leaving five crew members
+            # available for the large fabrication and logistics backlog.
+            previous_shift_ids = (
+                list(existing_order.get("construction_shift_crew_ids", []))
+                if same_site_order else []
+            )
+            construction_shift_crew_ids = [
+                crew_id for crew_id in previous_shift_ids
+                if crew_id in assignments
+            ][:1]
+            if not construction_shift_crew_ids and assigned:
+                construction_shift_crew_ids = [assigned[0].id]
             self.shared_work_order = {
                 "recipe": recipe_name,
                 "stage": "construction",
                 "site_id": site.get("id"),
                 "construction_crew_ids": [crew.id for crew in primary_crew],
+                "construction_shift_crew_ids": construction_shift_crew_ids,
                 "assignments": assignments,
                 "updated_tick": tick,
             }
@@ -3527,8 +3679,13 @@ class DecisionEngine:
                     # learned next-order path for maintenance or an objective
                     # introduced dynamically during the run.
                     queued = getattr(self, "_queued_construction_supply", {})
-                    if (queued.get("site_id") != site.get("id")
-                        or (not queued.get("recipe") and tick >= queued.get("review_tick", 0))):
+                    if (
+                        queued.get("site_id") != site.get("id")
+                        or (
+                            not queued.get("recipe")
+                            and tick >= queued.get("review_tick", 0)
+                        )
+                    ):
                         queued = {}
                     if not queued:
                         options = []
@@ -3537,29 +3694,47 @@ class DecisionEngine:
                             if not next_recipe or name == recipe_name:
                                 continue
                             prerequisite = next_recipe.get("requires_structure")
-                            if prerequisite and not structures_built.get(prerequisite, 0):
+                            if prerequisite and not structures_built.get(
+                                prerequisite, 0
+                            ):
                                 continue
                             status = self.colony.get_structure_capacity_status(name)
-                            if self._planning_fulfillment(name, status, structures_built) >= 1.0:
+                            if self._planning_fulfillment(
+                                name, status, structures_built
+                            ) >= 1.0:
                                 continue
-                            next_pool = self._materials_available_for_recipe(name, pooled, structures_built)
+                            next_pool = self._materials_available_for_recipe(
+                                name, pooled, structures_built
+                            )
                             if not self._shared_dependency_actions(name, next_pool):
                                 continue
-                            if not self._bootstrap_order_feasibility(name, pooled).get("actionable"):
+                            if not self._bootstrap_order_feasibility(
+                                name, pooled
+                            ).get("actionable"):
                                 continue
-                            options.append({"action": "prepare_capacity", "target": {"recipe": name}})
+                            options.append({
+                                "action": "prepare_capacity",
+                                "target": {"recipe": name},
+                            })
                         if options:
                             selected = self.select_action_via_rl(
-                                agent, self.get_colony_strategy_state(structures_built) + "|planning:upstream_bom", options
+                                agent,
+                                self.get_colony_strategy_state(structures_built)
+                                + "|planning:upstream_bom",
+                                options,
                             )
-                            queued = {"site_id": site.get("id"), "recipe": selected["target"]["recipe"]}
+                            queued = {
+                                "site_id": site.get("id"),
+                                "recipe": selected["target"]["recipe"],
+                            }
                             self._queued_construction_supply = queued
                         else:
-                            # Do not rebuild the whole candidate/BOM graph for
-                            # every idle crew member on every tick.
                             self._queued_construction_supply = {
-                                "site_id": site.get("id"), "recipe": None,
-                                "review_tick": tick + ticks_for_minutes(60.0, self.tick_minutes),
+                                "site_id": site.get("id"),
+                                "recipe": None,
+                                "review_tick": tick + ticks_for_minutes(
+                                    60.0, self.tick_minutes
+                                ),
                             }
                     if queued.get("recipe"):
                         support_recipe = queued["recipe"]
@@ -4260,6 +4435,19 @@ class DecisionEngine:
                 + return_ticks * agent.plss_o2_percent_per_tick(1.5),
             ),
         ))
+        tick_scale = float(getattr(
+            agent, "SIM_MINUTES_PER_TICK", 5.0
+        )) / 5.0
+        distance_adjusted_scrubber_return = float(getattr(
+            agent,
+            "_routine_eva_scrubber_return_threshold",
+            min(80.0, 18.0 + return_ticks * 0.35 * 1.5 * tick_scale),
+        ))
+        distance_adjusted_battery_return = float(getattr(
+            agent,
+            "_routine_eva_battery_return_threshold",
+            min(80.0, 18.0 + return_ticks * 0.40 * tick_scale),
+        ))
         active_o2_budgeted_expedition = (
             isinstance(getattr(agent, "_active_expedition", None), dict)
             and agent._active_expedition.get("status") in {"outbound", "working", "returning"}
@@ -4271,8 +4459,10 @@ class DecisionEngine:
             and getattr(agent.needs, "o2_supply", 0.0) > 10.0
         )
         plss_critical = (
-            getattr(agent, "plss_co2_scrubber_pct", 100.0) < 18.0 or
-            getattr(agent, "plss_suit_battery_pct", 100.0) < 18.0 or
+            getattr(agent, "plss_co2_scrubber_pct", 100.0)
+            <= distance_adjusted_scrubber_return or
+            getattr(agent, "plss_suit_battery_pct", 100.0)
+            <= distance_adjusted_battery_return or
             getattr(agent, "suit_integrity", 1.0) < 0.45 or
             getattr(agent, "suit_condition", 1.0) < 0.50 or
             (
@@ -4348,10 +4538,12 @@ class DecisionEngine:
                     f"PLSS pressure-suit integrity reserve "
                     f"({getattr(agent, 'suit_integrity', 1.0):.0%})"
                 )
-            elif getattr(agent, "plss_co2_scrubber_pct", 100.0) < 18.0:
-                cause_desc = "PLSS CO₂ scrubber reserve"
-            elif getattr(agent, "plss_suit_battery_pct", 100.0) < 18.0:
-                cause_desc = "PLSS battery reserve"
+            elif getattr(agent, "plss_co2_scrubber_pct", 100.0) <= distance_adjusted_scrubber_return:
+                cause_desc = (
+                    "distance-adjusted PLSS CO₂ scrubber return reserve"
+                )
+            elif getattr(agent, "plss_suit_battery_pct", 100.0) <= distance_adjusted_battery_return:
+                cause_desc = "distance-adjusted PLSS battery return reserve"
             else:
                 cause_desc = (
                     f"PLSS return reserve ({agent.needs.o2_supply:.0f}% O₂ "
@@ -5278,11 +5470,16 @@ class DecisionEngine:
             "_routine_eva_energy_return_threshold",
             min(90.0, 55.0 + fatigue_return_ticks * 1.25),
         ))
+        expedition_fatigue_return_threshold = float(getattr(
+            agent,
+            "_expedition_energy_return_threshold",
+            55.0,
+        ))
         expedition_local_return = (
             is_authorized_expedition
             and (
                 active_expedition.get("status") == "returning"
-                or agent.needs.energy <= 55.0
+                or agent.needs.energy <= expedition_fatigue_return_threshold
             )
         )
         if (
@@ -5411,6 +5608,32 @@ class DecisionEngine:
                     "reasoning": f"ACUTE THERMAL EMERGENCY: {agent.name} rushing into habitat airlock ({agent.needs.temperature_stress:.0f}%)",
                     "deterministic": True
                 }
+
+        # A local site assignment is a real shift contract. Route persistence
+        # below must not keep an otherwise-ready supervisor on an upstream
+        # extraction/haul route while the four assembly robots wait at the
+        # already-materialed work front. Survival, maintenance, medical,
+        # manufacturing and expedition commitments have already been excluded
+        # by the availability gate.
+        assigned_site = self._assigned_local_construction_site(agent)
+        if assigned_site is not None:
+            return {
+                "action": "build",
+                "target": {
+                    "recipe": assigned_site.get("type"),
+                    "struct_id": assigned_site.get("id"),
+                    "x": assigned_site.get("x"),
+                    "y": assigned_site.get("y"),
+                    "destination": "construction_site",
+                    "shared_work_order": True,
+                    "construction_shift": True,
+                },
+                "reasoning": (
+                    f"{agent.name} taking the assigned local construction "
+                    f"shift at {assigned_site.get('type')}"
+                ),
+                "deterministic": True,
+            }
 
         # A detector-confirmed rover mission needs two people. Preserve the
         # dispatcher's buddy assignment after this astronaut finishes current
@@ -6334,19 +6557,10 @@ class DecisionEngine:
                 # every other machine also contains a completed batch.
                 machine_busy = False
             needs = agent.needs
-            o2_safe = bool(getattr(agent, "_in_habitat", False)) or (
-                needs.o2_supply > 40.0
-            )
-            duty_ticks = min(
-                max(1, int(paused_manufacturing.get("remaining_ticks", 1))),
-                int(getattr(self, "manufacturing_shift_ticks", 78)),
-            )
-            operator_fit = (
-                needs.energy > min(96.0, 65.0 + duty_ticks * 0.4)
-                and needs.hunger > min(60.0, 35.0 + duty_ticks * 0.25)
-                and needs.thirst > min(70.0, 45.0 + duty_ticks * 0.25)
-                and 42.0 < needs.temperature_stress < 88.0
-                and o2_safe
+            operator_fit = self.manufacturing_vitals_ready(
+                agent, tick,
+                paused_manufacturing.get("remaining_ticks", 1),
+                getattr(self, "manufacturing_shift_ticks", 78),
             )
             # A completed duty block is held for a relief operator for one
             # full shift. The original operator must not hammer RESUME every

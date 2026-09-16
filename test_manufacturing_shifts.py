@@ -452,6 +452,126 @@ class AutonomousManufacturingTest(unittest.TestCase):
         self.operator.y = int(self.machine["y"])
         ManufacturingShiftTest._make_fit(self.operator)
 
+    def test_overtime_unload_agrees_between_planner_and_executor(self):
+        engine, agent = self.engine, self.operator
+        planner = engine.decision_engine
+        planner.agents = engine.agents
+        planner.lz_x, planner.lz_y = engine.lz_x, engine.lz_y
+        planner.placed_structures = engine.placed_structures
+        planner.structures_built = engine.structures_built
+        planner._colony_resources = engine._colony_resources
+        engine.current_tick = 50
+        agent.x, agent.y = engine.lz_x, engine.lz_y
+        agent._in_habitat = True
+        agent.needs.energy = 50
+        agent.needs.temperature_stress = 50
+        agent._fatigue_overtime_until_tick = 100
+        agent.action.clear()
+        cycle = {"machine_id": self.machine["id"], "output": "metal_pipe",
+                 "machine_type": "cnc_fabricator", "completion_pending": True,
+                 "output_ready": True, "remaining_ticks": 0, "unload_remaining_ticks": 1,
+                 "active": False, "x": self.machine["x"], "y": self.machine["y"]}
+        engine._manufacturing_cycles[cycle["machine_id"]] = cycle
+        planner.manufacturing_cycles = engine._manufacturing_cycles
+        agent._paused_manufacturing = engine._manufacturing_action_target(cycle, resumed=True)
+        decision = planner._process_tick_internal(agent, 50, {}, {
+            "temperature_c": 20, "effective_temperature_c": 20,
+            "active_events": [], "colony_resources": engine._colony_resources}, [])
+        self.assertTrue(engine._manufacturing_operator_is_fit(agent, engine._get_recipe("metal_pipe"), 1))
+        self.assertEqual("refine", decision["action"])
+        self.assertEqual("metal_pipe", decision["target"]["output"])
+        engine.current_tick = 101
+        self.assertFalse(engine._manufacturing_operator_is_fit(agent, engine._get_recipe("metal_pipe"), 1))
+        engine.current_tick = 50
+        agent.needs.thirst = 10
+        self.assertFalse(engine._manufacturing_operator_is_fit(agent, engine._get_recipe("metal_pipe"), 1))
+
+    def test_workshop_offer_does_not_reserve_before_physical_departure(self):
+        self.engine._process_agent_tick(self.operator, [], nearby_count=1)
+        cycle = next(iter(self.engine._manufacturing_cycles.values()))
+        self.operator.action.clear()
+        self.engine._offer_manufacturing_handoff(self.operator)
+        self.engine.current_tick = cycle["nominal_process_ticks"]
+        self.engine._advance_autonomous_manufacturing_cycles()
+        self.operator.action.clear()
+        self.assertIs(cycle, self.engine._offer_manufacturing_handoff(self.operator))
+        self.assertNotIn("route_operator_id", cycle)
+
+    def test_workshop_handoff_preserves_assigned_construction_supervisor(self):
+        from copy import deepcopy
+        self.engine._process_agent_tick(self.operator, [], nearby_count=1)
+        self.operator.action.clear()
+        self.engine._offer_manufacturing_handoff(self.operator)
+        cycle = next(iter(self.engine._manufacturing_cycles.values()))
+        self.engine.current_tick = cycle["nominal_process_ticks"]
+        self.engine._advance_autonomous_manufacturing_cycles()
+        self.operator.action.clear()
+        self.engine.placed_structures.append({"id": "active-site", "type": "habitat_module",
+                                               "under_construction": True, "progress": 0.5})
+        self.engine.decision_engine.shared_work_order = {
+            "stage": "construction", "site_id": "active-site",
+            "construction_shift_crew_ids": [self.operator.id]}
+        spare = deepcopy(self.operator)
+        spare.id = "spare-operator"
+        self.engine.add_agent(spare)
+        self.assertIsNone(self.engine._offer_manufacturing_handoff(self.operator))
+        self.assertIs(cycle, self.engine._offer_manufacturing_handoff(spare))
+
+    def test_interrupted_workshop_route_releases_completed_batch(self):
+        self.engine._process_agent_tick(self.operator, [], nearby_count=1)
+        cycle = next(iter(self.engine._manufacturing_cycles.values()))
+        self.engine.current_tick = cycle["nominal_process_ticks"]
+        self.engine._advance_autonomous_manufacturing_cycles()
+        cycle["route_operator_id"] = self.operator.id
+        cycle["route_reserved_until_tick"] = self.engine.current_tick + 20
+        self.operator.action.action_type = "move"
+        self.operator.action.target = {"machine_id": cycle["machine_id"], "destination": "manufacturing_machine"}
+        self.engine._enforce_manufacturing_cycle_invariants()
+        self.assertEqual(self.operator.id, cycle["route_operator_id"])
+        self.operator.action.action_type = "sleep"
+        self.operator.action.target = {"preflight_recovery": True}
+        self.engine._enforce_manufacturing_cycle_invariants()
+        self.assertNotIn("route_operator_id", cycle)
+        self.assertTrue(cycle["output_ready"])
+        self.assertEqual(0, self.operator.inventory.materials.get("metal_pipe", 0))
+
+    def test_unload_reloads_needed_batch_before_depot_trip(self):
+        self.engine.central_depot_inventory["reduced_iron_ingot"] = 4
+        self.operator.needs.temperature_stress = 50.0
+        self.engine.decision_engine.process_tick = lambda **kwargs: {
+            "action": "refine", "target": {"output": "metal_pipe", "capacity_recipe": "water_collector"}}
+        self.engine._process_agent_tick(self.operator, [], 1)
+        first = next(iter(self.engine._manufacturing_cycles.values()))
+        self.engine.current_tick = first["nominal_process_ticks"]
+        self.engine._advance_autonomous_manufacturing_cycles()
+        self.engine._assign_manufacturing_cycle(self.operator, first)
+        self.engine.current_tick += 1
+        # An unrelated depot plan must not strand an empty, fully supplied cell.
+        self.engine.decision_engine.process_tick = lambda **kwargs: {
+            "action": "deposit_materials", "target": {}}
+        events = self.engine._process_agent_tick(self.operator, [], 1)
+        second = self.engine._manufacturing_cycles.get(first["machine_id"])
+        self.assertIsNotNone(second)
+        self.assertNotEqual(first["cycle_id"], second["cycle_id"])
+        self.assertEqual(first["nominal_process_ticks"], second["remaining_ticks"])
+        self.assertEqual(2, self.operator.inventory.materials.get("metal_pipe", 0))
+        self.assertEqual(0, self.engine.central_depot_inventory.get("reduced_iron_ingot", 0))
+        self.assertAlmostEqual(85.0, self.engine._colony_resources["energy_stored_kwh"])
+        self.assertIn("manufacturing_completed", events)
+
+    def test_workshop_reload_requires_live_demand_and_full_inputs(self):
+        from unittest.mock import patch
+        completed = {"output": "metal_pipe", "machine_id": self.machine["id"],
+                     "capacity_recipe": "water_collector"}
+        self.operator.needs.temperature_stress = 50.0
+        self.engine.central_depot_inventory.clear()
+        self.assertIsNone(self.engine._offer_workshop_reload(self.operator, completed))
+        self.engine.central_depot_inventory["reduced_iron_ingot"] = 2
+        with patch.object(self.engine.decision_engine, "_bom_outstanding_requirements", return_value={}):
+            self.assertIsNone(self.engine._offer_workshop_reload(self.operator, completed))
+        self.operator.needs.thirst = 10
+        self.assertIsNone(self.engine._offer_workshop_reload(self.operator, completed))
+
     def test_operator_can_load_second_cell_and_unload_first_while_it_runs(self):
         from copy import deepcopy
 

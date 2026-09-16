@@ -86,6 +86,19 @@ class SharedConstructionRealismTest(unittest.TestCase):
         self.assertGreater(deficits["iron_ore"], 0)
         self.assertGreaterEqual(deficits["basalt"], 40)
 
+    def test_busy_machine_does_not_order_unbounded_raw_stock(self):
+        planner = self.engine.decision_engine
+        stock = {k: 2 * v for k, v in planner._raw_bom_deficits('solar_panel', {}).items()}
+        self.assertEqual({}, planner._raw_bom_deficits('solar_panel', stock))
+        result = planner._raw_support_action('solar_panel', stock, 0, self.crew[0], 100)
+        self.assertEqual('stand_watch', result['action'])
+        resource = next(iter(stock))
+        stock[resource] -= 1
+        result = planner._raw_support_action('solar_panel', stock, 0, self.crew[0], 100)
+        self.assertEqual('gather', result['action'])
+        self.assertEqual(resource, result['target']['resource'])
+        self.assertEqual(1, result['target']['quantity_needed'])
+
     def test_full_bom_projection_reuses_surplus_batch_output(self):
         planner = self.engine.decision_engine
         original = planner._recipes_cache
@@ -399,6 +412,88 @@ class SharedConstructionRealismTest(unittest.TestCase):
         }
         self.assertNotIn(sleeping.id, active_ids)
         self.assertEqual(3, len(active_ids))
+
+    def test_busy_multitick_worker_is_not_counted_as_site_relief(self):
+        planner = self.engine.decision_engine
+        x, y = self.engine.lz_x + 3, self.engine.lz_y
+        self.engine.placed_structures.append({
+            "id": "busy-relief-site", "type": "water_collector",
+            "x": x, "y": y, "under_construction": True,
+            "destroyed": False, "progress": 0.1,
+        })
+        busy = self.crew[0]
+        busy.action.action_type = "gather"
+        busy.action.target = {"resource": "iron_ore"}
+        busy.action.ticks_remaining = 12
+
+        for crew in self.crew:
+            planner._shared_colony_work_decision(
+                crew, tick=210, structures_built=self.engine.structures_built
+            )
+
+        active_ids = {
+            crew_id for crew_id, role
+            in planner.shared_work_order["assignments"].items()
+            if role == "construction"
+        }
+        self.assertNotIn(busy.id, active_ids)
+        self.assertEqual(3, len(active_ids))
+        shift_ids = planner.shared_work_order["construction_shift_crew_ids"]
+        self.assertEqual(1, len(shift_ids))
+        self.assertIn(shift_ids[0], active_ids)
+
+    def test_assigned_local_shift_redirects_upstream_supply_route(self):
+        planner = self.engine.decision_engine
+        worker = self.crew[0]
+        x, y = self.engine.lz_x + 3, self.engine.lz_y
+        site = {
+            "id": "local-shift-site", "type": "water_collector",
+            "x": x, "y": y, "under_construction": True,
+            "destroyed": False, "materials_committed": True,
+            "progress": 0.1,
+        }
+        self.engine.placed_structures.append(site)
+        planner.shared_work_order = {
+            "recipe": "water_collector",
+            "stage": "construction",
+            "site_id": site["id"],
+            "construction_crew_ids": [worker.id],
+            "assignments": {worker.id: "construction"},
+            "updated_tick": 220,
+        }
+        worker._in_habitat = False
+        worker.needs.temperature_stress = 50.0
+        worker.action.action_type = "move"
+        worker.action.target = {
+            "x": self.engine.lz_x + 8,
+            "y": self.engine.lz_y,
+            "destination": "extraction_face",
+            "resource": "iron_ore",
+        }
+        worker.action.ticks_remaining = 1
+        worker._active_excavation = {
+            "x": self.engine.lz_x + 8,
+            "y": self.engine.lz_y,
+            "resource": "iron_ore",
+            "capacity_recipe": "solar_panel",
+        }
+        before = (worker.x, worker.y)
+
+        decision = planner.process_tick(
+            worker,
+            tick=221,
+            tick_events={},
+            world_context={
+                "active_events": [],
+                "colony_resources": dict(self.engine._colony_resources),
+            },
+            nearby_agents=[],
+        )
+
+        self.assertEqual("build", decision["action"])
+        self.assertEqual(site["id"], decision["target"]["struct_id"])
+        self.assertTrue(decision["target"]["construction_shift"])
+        self.assertEqual(before, (worker.x, worker.y))
 
     def _stage_isru_with_electronics_deficit(self, missing_components=3):
         """Stage every ISRU top-level part except a bounded electronics gap."""
@@ -878,6 +973,61 @@ class SharedConstructionRealismTest(unittest.TestCase):
 
         self.assertEqual("deposit_materials", decision["action"])
         self.assertEqual("central_depot", decision["target"]["destination"])
+
+    def test_carried_intermediate_feeds_next_workshop_without_depot_detour(self):
+        planner = self.engine.decision_engine
+        worker = self.crew[0]
+        self.engine.delivered_structure_kits.clear()
+        self.engine.central_depot_inventory.clear()
+        self.engine.central_depot_inventory["reduced_iron_ingot"] = 5
+        planner._colony_resources = self.engine._colony_resources
+        planner._colony_resources["energy_stored_kwh"] = 100.0
+        planner._recipes_cache["test_feed_manifest"] = {
+            "materials": {"metal_pipe": 2}, "output": {"type": "planning_manifest"}}
+        for crew in self.crew:
+            crew.inventory.materials.clear()
+        furnace = next(s for s in self.engine.placed_structures if s["type"] == "stone_furnace")
+        worker.x, worker.y = furnace["x"], furnace["y"]
+        worker._in_habitat = False
+        worker.inventory.materials["reduced_iron_ingot"] = 2
+        worker.needs.temperature_stress = 50.0
+        decision = planner._shared_supply_decision(
+            agent=worker, tick=10, structures_built=self.engine.structures_built,
+            living=self.crew, recipe_name="test_feed_manifest", order={}, assignments={})
+        self.assertEqual("refine", decision["action"])
+        self.assertEqual("metal_pipe", decision["target"]["output"])
+        self.assertEqual(2, worker.inventory.materials["reduced_iron_ingot"])
+        planner.process_tick = lambda **kwargs: decision
+        for tick in range(10, 22):
+            self.engine.current_tick = tick
+            worker.action.clear()
+            self.engine._process_agent_tick(worker, [], 1)
+            if self.engine._manufacturing_cycles:
+                break
+        self.assertTrue(self.engine._manufacturing_cycles)
+        self.assertEqual(0, worker.inventory.materials.get("reduced_iron_ingot", 0))
+        self.assertEqual(0, worker.inventory.materials.get("metal_pipe", 0))
+        self.assertEqual(5, self.engine.central_depot_inventory["reduced_iron_ingot"])
+
+    def test_direct_feed_cannot_use_another_workers_carried_input(self):
+        planner = self.engine.decision_engine
+        self.engine.delivered_structure_kits.clear()
+        self.engine.central_depot_inventory.clear()
+        planner._colony_resources = self.engine._colony_resources
+        planner._colony_resources["energy_stored_kwh"] = 100.0
+        planner._recipes_cache["test_feed_manifest"] = {
+            "materials": {"metal_pipe": 2}, "output": {"type": "planning_manifest"}}
+        for crew in self.crew:
+            crew.inventory.materials.clear()
+        worker, other = self.crew[:2]
+        worker.x, worker.y = self.engine.lz_x + 8, self.engine.lz_y + 8
+        other.x, other.y = self.engine.lz_x - 8, self.engine.lz_y - 8
+        worker.inventory.materials["reduced_iron_ingot"] = 1
+        other.inventory.materials["reduced_iron_ingot"] = 1
+        decision = planner._shared_supply_decision(
+            agent=worker, tick=10, structures_built=self.engine.structures_built,
+            living=self.crew, recipe_name="test_feed_manifest", order={}, assignments={})
+        self.assertEqual("deposit_materials", decision["action"])
 
     def test_empty_construction_site_does_not_build_itself(self):
         x, y = self.engine._select_structure_site("solar_panel")
@@ -1398,6 +1548,45 @@ class SharedConstructionRealismTest(unittest.TestCase):
         )
         self.assertIn("column.detected_next_layer", frontend)
         self.assertIn("layerOrder: Number(nextLayer.relative_order || 1)", frontend)
+
+
+    def test_stale_completed_site_id_joins_live_successor(self):
+        recipe_name = "water_collector"
+        x, y = self.engine.lz_x + 3, self.engine.lz_y + 3
+        live = {
+            "id": "live-successor",
+            "type": recipe_name,
+            "x": x,
+            "y": y,
+            "under_construction": True,
+            "destroyed": False,
+            "materials_committed": True,
+            "construction_phase": "assembly",
+            "required_work_hours": 40.0,
+            "work_hours_completed": 1.0,
+            "progress": 0.025,
+            "ticks_remaining": 100,
+        }
+        self.engine.placed_structures.append(live)
+        worker = self.crew[0]
+        worker.x, worker.y = x, y
+        worker._in_habitat = False
+        worker.action.clear()
+        before = len(self.engine.placed_structures)
+        self.engine.decision_engine.process_tick = lambda **_kwargs: {
+            "action": "build",
+            "target": {
+                "recipe": recipe_name,
+                "struct_id": "already-completed-site",
+            },
+            "deterministic": True,
+        }
+
+        self.engine._process_agent_tick(worker, [], nearby_count=1)
+
+        self.assertEqual(before, len(self.engine.placed_structures))
+        self.assertEqual("build", worker.action.action_type)
+        self.assertEqual(live["id"], worker.action.target["struct_id"])
 
 
 if __name__ == "__main__":

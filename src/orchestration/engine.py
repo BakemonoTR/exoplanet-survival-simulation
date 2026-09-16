@@ -87,6 +87,13 @@ class SimulationEngine:
     # 39 ten-minute ticks models one primary operations shift while vitals can
     # still interrupt it earlier.
     MANUFACTURING_SHIFT_TICKS = 39
+    # Construction pace is selected for a bounded half-hour field bout.
+    # Baseline BUILD is about 6 MET; surge raises it to about 9 MET. Keeping
+    # the strenuous interval to 30 minutes respects the modeled EVA water
+    # reserve and gives the policy a real opportunity to stop or continue.
+    CONSTRUCTION_EFFORT_SHIFT_MINUTES = 30.0
+    CONSTRUCTION_SURGE_PRODUCTIVITY_MULTIPLIER = 1.30
+    CONSTRUCTION_SURGE_METABOLIC_MULTIPLIER = 1.50
     # A six-person precursor crew operates on foot around the landing hub.
     # Long-range deposits require later survey/transport infrastructure; they
     # must not turn an ordinary gather/explore decision into a multi-kilometre
@@ -270,6 +277,10 @@ class SimulationEngine:
                 "rl_surge_metabolic_multiplier", 1.5
             ))),
         )
+        self.CONSTRUCTION_EFFORT_SHIFT_TICKS = ticks_for_minutes(
+            self.CONSTRUCTION_EFFORT_SHIFT_MINUTES,
+            self.SIM_MINUTES_PER_TICK,
+        )
         self.surface_fleet = SurfaceFleet(self.mission_profile)
         self.airlock = AirlockController(ticks_for_minutes(10.0, self.SIM_MINUTES_PER_TICK))
         # Mission planners know which resource classes exist somewhere on the
@@ -355,6 +366,10 @@ class SimulationEngine:
             deadline_learning=strategic_deadline_learning,
         )
         self._strategy_deadline_readiness = 0.0
+        # Keep the category vector from the best balanced state observed
+        # before the infrastructure deadline.  Terminal learning must not
+        # credit capacity that appeared during the later support window.
+        self._strategy_deadline_scores: dict[str, float] = {}
         self.decision_engine.strategic_policy = self.strategic_policy
         self._strategic_policy_loaded = False
         self._terminal_reward_applied = False
@@ -471,6 +486,8 @@ class SimulationEngine:
             "process_cycles_completed": 0,
             "cycles_unloaded": 0,
             "nominal_process_ticks_committed": 0,
+            "unload_wait_ticks_total": 0,
+            "unload_wait_ticks_max": 0,
         }
         # The planner needs the same canonical machine ledger as execution;
         # otherwise an inactive/relief-reserved WIP batch looks like a free
@@ -609,6 +626,8 @@ class SimulationEngine:
             "censored_by_reason": {},
             "estimated_ticks_saved": 0.0,
             "total_route_reward": 0.0,
+            "shared_shop_routes": 0,
+            "shared_shop_outcomes": 0,
             "by_mode": {
                 mode: {
                     "completed_routes": 0,
@@ -626,6 +645,37 @@ class SimulationEngine:
             },
         }
         
+        self._construction_effort_telemetry = {
+            "eligible_shifts": 0,
+            "steady_shifts": 0,
+            "surge_shifts": 0,
+            "settled_shifts": 0,
+            "interrupted_shifts": 0,
+            "safety_masked_work_ticks": 0,
+            "shared_outcomes": 0,
+            "productive_work_hours": 0.0,
+            "baseline_work_hours": 0.0,
+            "total_reward": 0.0,
+            "last_outcome": None,
+            "by_mode": {
+                mode: {
+                    "settled_shifts": 0,
+                    "interrupted_shifts": 0,
+                    "active_ticks": 0,
+                    "productive_work_hours": 0.0,
+                    "baseline_work_hours": 0.0,
+                    "energy_loss": 0.0,
+                    "hunger_loss": 0.0,
+                    "thirst_loss": 0.0,
+                    "o2_loss": 0.0,
+                    "scrubber_loss": 0.0,
+                    "battery_loss": 0.0,
+                    "total_reward": 0.0,
+                }
+                for mode in ("steady", "surge")
+            },
+        }
+
         # Structure health tracks real damage, not a game-style countdown.
         # Calendar maintenance is recorded per physical asset; missing an
         # inspection increases vulnerability to an actual hazard but cannot
@@ -2559,7 +2609,9 @@ class SimulationEngine:
                 return int(x), int(y)
         return None
 
-    def _construction_productivity(self, agent: Agent) -> float:
+    def _construction_productivity(
+        self, agent: Agent, *, include_effort: bool = True
+    ) -> float:
         """Effective person-hours contributed per scheduled person-hour."""
         engineering = float(getattr(agent.competency, "engineering", 5))
         strength = float(getattr(agent.genome, "strength", 5))
@@ -2567,13 +2619,396 @@ class SimulationEngine:
         energy_factor = max(0.45, min(1.0, agent.needs.energy / 80.0))
         gravity = max(0.3, float(getattr(agent, "gravity_g", 1.0)))
         gravity_factor = min(1.15, 1.0 / math.sqrt(gravity))
-        return max(0.35, min(1.35, base * energy_factor * gravity_factor))
+        productivity = max(
+            0.35, min(1.35, base * energy_factor * gravity_factor)
+        )
+        target = (
+            agent.action.target
+            if isinstance(getattr(agent.action, "target", None), dict)
+            else {}
+        )
+        if (
+            include_effort
+            and getattr(agent.action, "action_type", "") == "build"
+            and target.get("effort_mode") == "surge"
+        ):
+            productivity *= self.CONSTRUCTION_SURGE_PRODUCTIVITY_MULTIPLIER
+        return productivity
+
+    def _construction_effort_state(
+        self,
+        agent: Agent,
+        structure: dict,
+        active_robot_count: int,
+    ) -> str:
+        """Compact reusable context for one supervised construction shift."""
+        remaining = max(
+            0.0,
+            float(structure.get("required_work_hours", 0.0))
+            - float(structure.get("work_hours_completed", 0.0)),
+        )
+        remaining_band = "short" if remaining <= 12.0 else "long"
+        energy_band = "fresh" if agent.needs.energy >= 90.0 else "ready"
+        reserve_band = (
+            "full"
+            if (
+                agent.needs.hunger >= 82.0
+                and agent.needs.thirst >= 88.0
+                and agent.needs.o2_supply >= 82.0
+            )
+            else "adequate"
+        )
+        phase = (
+            "utility"
+            if structure.get("utility_route_required", False)
+            and not structure.get("utility_route_installed", False)
+            else "rework"
+            if structure.get("quality_hold", False)
+            else "assembly"
+        )
+        return (
+            "construction-effort-v1"
+            f"|phase:{phase}|remaining:{remaining_band}"
+            f"|energy:{energy_band}|reserve:{reserve_band}"
+            f"|robots:{'assisted' if active_robot_count else 'none'}"
+        )
+
+    def _surge_construction_allowed(
+        self, agent: Agent, projected_ticks: int
+    ) -> bool:
+        """Keep a strenuous field shift inside the EVA return envelope."""
+        projected_ticks = max(1, int(projected_ticks))
+        surge_activity = (
+            2.0 * self.CONSTRUCTION_SURGE_METABOLIC_MULTIPLIER
+        )
+        energy_margin = (
+            self._estimated_eva_energy_drain_per_tick(agent, surge_activity)
+            * 1.10 * projected_ticks
+        )
+        hunger_margin = (
+            float(agent.needs.BASE_HUNGER_DECAY)
+            * surge_activity * 1.20 * projected_ticks
+        )
+        thirst_margin = (
+            float(agent.water_requirement_l_per_tick(
+                is_eva=not bool(getattr(agent, "_in_habitat", False)),
+                activity_multiplier=surge_activity,
+            ))
+            * 35.0 * 1.20 * projected_ticks
+        )
+        outside = not bool(getattr(agent, "_in_habitat", False))
+        o2_margin = (
+            float(agent.plss_o2_percent_per_tick(surge_activity))
+            * 1.10 * projected_ticks
+            if outside else 0.0
+        )
+        return_ticks = self._eva_return_transport_ticks(agent) if outside else 0
+        tick_scale = self.SIM_MINUTES_PER_TICK / 5.0
+        scrubber_required = (
+            18.0
+            + 0.35 * surge_activity * tick_scale * projected_ticks
+            + 0.35 * 1.5 * tick_scale * return_ticks
+        )
+        battery_required = (
+            18.0
+            + 0.40 * tick_scale * (projected_ticks + return_ticks)
+        )
+        energy_return = float(getattr(
+            agent, "_routine_eva_energy_return_threshold", 55.0
+        ))
+        o2_return = float(getattr(
+            agent, "_routine_eva_o2_return_threshold", 40.0
+        ))
+        return bool(
+            agent.needs.energy >= max(70.0, energy_return + 5.0) + energy_margin
+            and agent.needs.hunger >= 42.0 + hunger_margin
+            and agent.needs.thirst >= 67.0 + thirst_margin
+            and (
+                not outside
+                or (
+                    agent.needs.o2_supply
+                    >= max(52.0, o2_return + 8.0) + o2_margin
+                    and float(getattr(
+                        agent, "plss_co2_scrubber_pct", 0.0
+                    )) >= scrubber_required
+                    and float(getattr(
+                        agent, "plss_suit_battery_pct", 0.0
+                    )) >= battery_required
+                    and float(getattr(
+                        agent, "hypercapnia_level", 0.0
+                    )) <= 0.0
+                    and int(getattr(
+                        agent, "_eva_ticks_continuous", 0
+                    )) + projected_ticks + return_ticks
+                    <= self.MAX_CONTINUOUS_EVA_TICKS
+                )
+            )
+            and 38.0 <= agent.needs.temperature_stress <= 72.0
+            and float(getattr(agent, "injury_level", 0.0)) < 0.10
+            and float(getattr(agent, "suit_integrity", 0.0)) >= 0.70
+            and float(getattr(agent, "suit_condition", 0.0)) >= 0.50
+            and not bool(getattr(agent, "has_micro_puncture", False))
+            and int(getattr(agent, "radiation_sickness_level", 0)) == 0
+            and not getattr(agent, "active_diseases", [])
+            and agent.operational_load_fraction(
+                float(getattr(agent, "gravity_g", self.planet.gravity_g))
+            ) <= 1.0
+        )
+
+    def _set_construction_effort_target(
+        self, agent: Agent, mode: str
+    ) -> None:
+        target = (
+            agent.action.target
+            if isinstance(getattr(agent.action, "target", None), dict)
+            else {}
+        )
+        agent.action.target = target
+        target["effort_mode"] = str(mode)
+        target["effort_multiplier"] = (
+            self.CONSTRUCTION_SURGE_METABOLIC_MULTIPLIER
+            if mode == "surge" else 1.0
+        )
+
+    def _settle_construction_effort(
+        self,
+        agent: Agent,
+        *,
+        completed: bool,
+        reason: str,
+    ) -> float:
+        """Credit only work and physiological cost measured in this shift."""
+        contract = getattr(agent, "_construction_effort_contract", None)
+        if not isinstance(contract, dict):
+            return 0.0
+        active_ticks = max(0, int(contract.get("active_ticks", 0)))
+        if active_ticks <= 0:
+            delattr(agent, "_construction_effort_contract")
+            return 0.0
+
+        productive = max(0.0, float(contract.get(
+            "productive_work_hours", 0.0
+        )))
+        baseline = max(0.0, float(contract.get(
+            "baseline_work_hours", 0.0
+        )))
+        gain_fraction = (
+            (productive - baseline) / baseline if baseline > 1e-9 else 0.0
+        )
+        energy_loss = max(
+            0.0, float(contract["start_energy"]) - agent.needs.energy
+        )
+        hunger_loss = max(
+            0.0, float(contract["start_hunger"]) - agent.needs.hunger
+        )
+        thirst_loss = max(
+            0.0, float(contract["start_thirst"]) - agent.needs.thirst
+        )
+        o2_loss = max(
+            0.0, float(contract["start_o2"]) - agent.needs.o2_supply
+        )
+        scrubber_loss = max(
+            0.0,
+            float(contract["start_scrubber"])
+            - float(getattr(agent, "plss_co2_scrubber_pct", 0.0)),
+        )
+        battery_loss = max(
+            0.0,
+            float(contract["start_battery"])
+            - float(getattr(agent, "plss_suit_battery_pct", 0.0)),
+        )
+        reward = (
+            0.75
+            + gain_fraction * 6.0
+            - energy_loss * 0.10
+            - hunger_loss * 0.06
+            - thirst_loss * 0.08
+            - o2_loss * 0.05
+            - scrubber_loss * 0.08
+            - battery_loss * 0.03
+            - max(0.0, 72.0 - agent.needs.energy) * 0.12
+            - max(0.0, 65.0 - agent.needs.thirst) * 0.10
+            - max(
+                0.0,
+                45.0 - float(getattr(
+                    agent, "plss_co2_scrubber_pct", 100.0
+                )),
+            ) * 0.12
+        )
+        if not completed:
+            reward -= 3.0 if contract.get("mode") == "surge" else 1.0
+        reward = max(-12.0, min(6.0, reward))
+        components = {
+            "result": reason,
+            "completed": bool(completed),
+            "active_ticks": active_ticks,
+            "productive_work_hours": round(productive, 4),
+            "baseline_work_hours": round(baseline, 4),
+            "gain_fraction": round(gain_fraction, 4),
+            "energy_loss": round(energy_loss, 3),
+            "hunger_loss": round(hunger_loss, 3),
+            "thirst_loss": round(thirst_loss, 3),
+            "o2_loss": round(o2_loss, 3),
+            "scrubber_loss": round(scrubber_loss, 3),
+            "battery_loss": round(battery_loss, 3),
+        }
+        learned = self.strategic_policy.observe_operational_outcome(
+            str(contract["state_key"]),
+            str(contract["action_key"]),
+            reward,
+            components=components,
+        )
+        telemetry = self._construction_effort_telemetry
+        telemetry["settled_shifts"] += 1
+        telemetry["interrupted_shifts"] += int(not completed)
+        telemetry["shared_outcomes"] += int(learned)
+        telemetry["productive_work_hours"] += productive
+        telemetry["baseline_work_hours"] += baseline
+        telemetry["total_reward"] += reward
+        mode = str(contract.get("mode", "steady"))
+        mode_stats = telemetry["by_mode"][mode]
+        mode_stats["settled_shifts"] += 1
+        mode_stats["interrupted_shifts"] += int(not completed)
+        mode_stats["active_ticks"] += active_ticks
+        mode_stats["productive_work_hours"] += productive
+        mode_stats["baseline_work_hours"] += baseline
+        mode_stats["energy_loss"] += energy_loss
+        mode_stats["hunger_loss"] += hunger_loss
+        mode_stats["thirst_loss"] += thirst_loss
+        mode_stats["o2_loss"] += o2_loss
+        mode_stats["scrubber_loss"] += scrubber_loss
+        mode_stats["battery_loss"] += battery_loss
+        mode_stats["total_reward"] += reward
+        telemetry["last_outcome"] = {
+            "agent_id": agent.id,
+            "site_id": contract.get("site_id"),
+            "mode": mode,
+            **components,
+            "reward": round(reward, 3),
+        }
+        delattr(agent, "_construction_effort_contract")
+        return reward
+
+    def _construction_effort_mode(
+        self,
+        agent: Agent,
+        structure: dict,
+        active_robot_count: int,
+    ) -> str:
+        """Choose or reuse the learned pace for a bounded field shift."""
+        site_id = str(structure.get("id", ""))
+        existing = getattr(agent, "_construction_effort_contract", None)
+        if isinstance(existing, dict):
+            if str(existing.get("site_id")) != site_id:
+                self._settle_construction_effort(
+                    agent, completed=True, reason="site_changed"
+                )
+                existing = None
+            elif int(existing.get("active_ticks", 0)) >= int(
+                self.CONSTRUCTION_EFFORT_SHIFT_TICKS
+            ):
+                self._settle_construction_effort(
+                    agent, completed=True, reason="shift_complete"
+                )
+                existing = None
+            elif (
+                existing.get("mode") == "surge"
+                and not self._surge_construction_allowed(
+                    agent,
+                    int(self.CONSTRUCTION_EFFORT_SHIFT_TICKS)
+                    - int(existing.get("active_ticks", 0)),
+                )
+            ):
+                self._settle_construction_effort(
+                    agent, completed=True, reason="safety_envelope_changed"
+                )
+                self._construction_effort_telemetry[
+                    "safety_masked_work_ticks"
+                ] += 1
+                self._set_construction_effort_target(agent, "steady")
+                return "steady"
+            else:
+                mode = str(existing.get("mode", "steady"))
+                self._set_construction_effort_target(agent, mode)
+                return mode
+
+        if not self._surge_construction_allowed(
+            agent, self.CONSTRUCTION_EFFORT_SHIFT_TICKS
+        ):
+            self._construction_effort_telemetry[
+                "safety_masked_work_ticks"
+            ] += 1
+            self._set_construction_effort_target(agent, "steady")
+            return "steady"
+
+        state_key = self._construction_effort_state(
+            agent, structure, active_robot_count
+        )
+        selected = self.strategic_policy.choose_operational_action(
+            state_key,
+            ("construction_pace:steady", "construction_pace:surge"),
+            initial_q=0.0,
+        ) or {
+            "state_key": state_key,
+            "action_key": "construction_pace:steady",
+        }
+        mode = str(selected["action_key"]).rsplit(":", 1)[-1]
+        agent._construction_effort_contract = {
+            "site_id": site_id,
+            "mode": mode,
+            "state_key": selected["state_key"],
+            "action_key": selected["action_key"],
+            "start_tick": int(self.current_tick),
+            "active_ticks": 0,
+            "productive_work_hours": 0.0,
+            "baseline_work_hours": 0.0,
+            "start_energy": float(agent.needs.energy),
+            "start_hunger": float(agent.needs.hunger),
+            "start_thirst": float(agent.needs.thirst),
+            "start_o2": float(agent.needs.o2_supply),
+            "start_scrubber": float(getattr(
+                agent, "plss_co2_scrubber_pct", 100.0
+            )),
+            "start_battery": float(getattr(
+                agent, "plss_suit_battery_pct", 100.0
+            )),
+        }
+        telemetry = self._construction_effort_telemetry
+        telemetry["eligible_shifts"] += 1
+        telemetry[f"{mode}_shifts"] += 1
+        self._set_construction_effort_target(agent, mode)
+        return mode
+
+    def _record_construction_effort(
+        self,
+        agent: Agent,
+        structure: dict,
+        *,
+        productive_work_hours: float,
+        baseline_work_hours: float,
+    ) -> None:
+        """Attach only this builder's accepted work to its current choice."""
+        contract = getattr(agent, "_construction_effort_contract", None)
+        if (
+            not isinstance(contract, dict)
+            or str(contract.get("site_id"))
+            != str(structure.get("id", ""))
+        ):
+            return
+        contract["active_ticks"] = int(contract.get("active_ticks", 0)) + 1
+        contract["productive_work_hours"] = float(contract.get(
+            "productive_work_hours", 0.0
+        )) + max(0.0, float(productive_work_hours))
+        contract["baseline_work_hours"] = float(contract.get(
+            "baseline_work_hours", 0.0
+        )) + max(0.0, float(baseline_work_hours))
 
     def _movement_effort_state(
         self,
         agent: Agent,
         remaining_cells: int,
         terrain_cost: float,
+        target: dict | None = None,
     ) -> str:
         """Return a compact state for the independent travel-effort policy."""
         if remaining_cells <= 2:
@@ -2589,6 +3024,36 @@ class SimulationEngine:
             else "adequate"
         )
         terrain_band = "clear" if terrain_cost <= 1.20 else "costly"
+        target = target if isinstance(target, dict) else {}
+        shop_release = (
+            target.get("destination") == "manufacturing_machine"
+            and target.get("resume_machine_cycle")
+        )
+        if shop_release:
+            cycle = self._manufacturing_cycles.get(str(target.get("machine_id")))
+            wait_ticks = max(
+                0,
+                int(self.current_tick)
+                - int((cycle or {}).get(
+                    "process_completed_tick", self.current_tick
+                )),
+            )
+            wait_band = (
+                "fresh" if wait_ticks <= 6
+                else "waiting" if wait_ticks <= 18
+                else "blocked"
+            )
+            backlog = sum(
+                1 for pending in self._manufacturing_cycles.values()
+                if pending.get("completion_pending")
+                and pending.get("output_ready")
+            )
+            return (
+                "shop-effort-v1|activity:machine_release"
+                f"|distance:{distance_band}|energy:{energy_band}"
+                f"|reserve:{reserve_band}|terrain:{terrain_band}"
+                f"|wait:{wait_band}|backlog:{'many' if backlog >= 2 else 'one'}"
+            )
         return (
             "effort-v1|activity:surface_move"
             f"|distance:{distance_band}|energy:{energy_band}"
@@ -2639,6 +3104,13 @@ class SimulationEngine:
             float(agent.plss_o2_percent_per_tick(surge_activity))
             * 1.10 * exposure_ticks
         )
+        tick_scale = self.SIM_MINUTES_PER_TICK / 5.0
+        projected_scrubber_margin = (
+            0.35 * surge_activity * tick_scale * max(1, projected_ticks)
+        )
+        projected_battery_margin = (
+            0.40 * tick_scale * max(1, projected_ticks)
+        )
         energy_return = float(getattr(
             agent, "_routine_eva_energy_return_threshold", 55.0
         ))
@@ -2654,6 +3126,14 @@ class SimulationEngine:
             and agent.needs.o2_supply >= (
                 max(55.0, o2_return + 10.0) + projected_o2_margin
             )
+            and float(getattr(
+                agent, "plss_co2_scrubber_pct", 0.0
+            )) >= 18.0 + projected_scrubber_margin
+            and float(getattr(
+                agent, "plss_suit_battery_pct", 0.0
+            )) >= 18.0 + projected_battery_margin
+            and float(getattr(agent, "hypercapnia_level", 0.0)) <= 0.0
+            and not bool(getattr(agent, "has_micro_puncture", False))
             and 35.0 <= agent.needs.temperature_stress <= 70.0
             and float(getattr(agent, "injury_level", 0.0)) < 0.10
             and int(getattr(agent, "radiation_sickness_level", 0)) == 0
@@ -2776,12 +3256,30 @@ class SimulationEngine:
             mode_stats["aborted_routes"] += 1
 
         reward = max(-15.0, min(6.0, reward))
-        self.decision_engine.apply_delayed_rl_reward(
-            agent,
-            str(contract["state_key"]),
-            str(contract["action_key"]),
-            reward,
-        )
+        reward_components = {
+            "result": reason,
+            "completed": bool(completed),
+            "elapsed_ticks": elapsed,
+            "expected_steady_ticks": round(expected, 3),
+            "energy_loss": round(energy_loss, 3),
+            "thirst_loss": round(thirst_loss, 3),
+            "o2_loss": round(o2_loss, 3),
+        }
+        if contract.get("credit_policy") == "shared_operational":
+            if self.strategic_policy.observe_operational_outcome(
+                str(contract["state_key"]),
+                str(contract["action_key"]),
+                reward,
+                components=reward_components,
+            ):
+                self._movement_effort_telemetry["shared_shop_outcomes"] += 1
+        else:
+            self.decision_engine.apply_delayed_rl_reward(
+                agent,
+                str(contract["state_key"]),
+                str(contract["action_key"]),
+                reward,
+            )
         self._movement_effort_telemetry["total_route_reward"] += reward
         mode_stats["elapsed_ticks"] += elapsed
         mode_stats["expected_steady_ticks"] += expected
@@ -2864,18 +3362,30 @@ class SimulationEngine:
             return "steady"
 
         state_key = self._movement_effort_state(
-            agent, remaining_cells, terrain_cost
+            agent, remaining_cells, terrain_cost, target
         )
-        selected = self.decision_engine.select_auxiliary_action_via_rl(
-            agent,
-            state_key,
-            [
-                {"action": "pace", "target": {"destination": "steady"}},
-                {"action": "pace", "target": {"destination": "surge"}},
-            ],
-            initial_q=1.0,
-        )
-        mode = str(selected.get("target", {}).get("destination", "steady"))
+        shared_shop_route = state_key.startswith("shop-effort-v1|")
+        if shared_shop_route:
+            selected = self.strategic_policy.choose_operational_action(
+                state_key,
+                ("shop_pace:steady", "shop_pace:surge"),
+                initial_q=1.0,
+            )
+            mode = (
+                str((selected or {}).get("action_key", "shop_pace:steady"))
+                .rsplit(":", 1)[-1]
+            )
+        else:
+            selected = self.decision_engine.select_auxiliary_action_via_rl(
+                agent,
+                state_key,
+                [
+                    {"action": "pace", "target": {"destination": "steady"}},
+                    {"action": "pace", "target": {"destination": "surge"}},
+                ],
+                initial_q=1.0,
+            )
+            mode = str(selected.get("target", {}).get("destination", "steady"))
         nominal_rate = max(
             1.0,
             min(
@@ -2889,8 +3399,17 @@ class SimulationEngine:
         agent._movement_effort_contract = {
             "signature": signature,
             "mode": mode,
-            "state_key": selected["auxiliary_state_key"],
-            "action_key": selected["auxiliary_action_key"],
+            "credit_policy": (
+                "shared_operational" if shared_shop_route else "agent_tactical"
+            ),
+            "state_key": (
+                selected["state_key"]
+                if shared_shop_route else selected["auxiliary_state_key"]
+            ),
+            "action_key": (
+                selected["action_key"]
+                if shared_shop_route else selected["auxiliary_action_key"]
+            ),
             "start_tick": int(self.current_tick),
             "expected_steady_ticks": int(expected_steady_ticks),
             "expected_surge_ticks": int(expected_surge_ticks),
@@ -2900,6 +3419,8 @@ class SimulationEngine:
         }
         self._movement_effort_telemetry["eligible_routes"] += 1
         self._movement_effort_telemetry[f"{mode}_routes"] += 1
+        if shared_shop_route:
+            self._movement_effort_telemetry["shared_shop_routes"] += 1
         return mode
 
     def _construction_acceptance_record(
@@ -3122,6 +3643,19 @@ class SimulationEngine:
         reconciled: list[dict] = []
         agents_by_id = {crew.id: crew for crew in self.agents}
         for machine_id, cycle in self._manufacturing_cycles.items():
+            route_owner = agents_by_id.get(cycle.get("route_operator_id"))
+            route_target = (route_owner.action.target or {}) if route_owner else {}
+            route_active = bool(
+                route_owner
+                and getattr(route_owner.status, "value", str(route_owner.status)) not in {"dead", "incapacitated"}
+                and route_owner.action.action_type in {"move", "arrived"}
+                and isinstance(route_target, dict)
+                and str(route_target.get("machine_id")) == str(machine_id)
+                and route_target.get("destination") == "manufacturing_machine"
+            )
+            if cycle.get("route_operator_id") and not route_active:
+                cycle.pop("route_operator_id", None)
+                cycle.pop("route_reserved_until_tick", None)
             if not cycle.get("completion_pending") or not cycle.get("active"):
                 continue
             if cycle.get("autonomous") and not cycle.get("output_ready"):
@@ -3236,25 +3770,8 @@ class SimulationEngine:
         non_material_recipe["requires_tool"] = False
         if not agent.can_craft(non_material_recipe).get("can_craft", False):
             return False
-        needs = agent.needs
-        o2_safe = bool(getattr(agent, "_in_habitat", False)) or needs.o2_supply > 40.0
-        duty_ticks = min(
-            max(1, int(duty_ticks)), self.MANUFACTURING_SHIFT_TICKS
-        )
-        overtime_active = self.current_tick <= int(getattr(
-            agent, "_fatigue_overtime_until_tick", -1
-        ))
-        energy_floor = (
-            min(45.0, 15.0 + duty_ticks * 0.35)
-            if overtime_active
-            else min(96.0, 65.0 + duty_ticks * 0.4)
-        )
-        return (
-            needs.energy > energy_floor
-            and needs.hunger > min(60.0, 35.0 + duty_ticks * 0.25)
-            and needs.thirst > min(70.0, 45.0 + duty_ticks * 0.25)
-            and 42.0 < needs.temperature_stress < 88.0
-            and o2_safe
+        return self.decision_engine.manufacturing_vitals_ready(
+            agent, self.current_tick, duty_ticks, self.MANUFACTURING_SHIFT_TICKS
         )
 
     def _agent_can_take_manufacturing_cycle(
@@ -3401,12 +3918,63 @@ class SimulationEngine:
         agent._paused_manufacturing = paused_target
         return cycle
 
+    def _offer_workshop_reload(self, agent: Agent, completed: dict | None) -> dict | None:
+        """Reload a needed batch during the same physical machine visit."""
+        if not completed or not completed.get("capacity_recipe"):
+            return None
+        if getattr(agent, "_construction_preparation", None) or getattr(agent, "_active_expedition", None):
+            return None
+        order = getattr(self.decision_engine, "shared_work_order", {}) or {}
+        if order.get("stage") == "construction" and agent.id in order.get("construction_shift_crew_ids", []):
+            return None
+        machine_id = str(completed.get("machine_id"))
+        machine = next((item for item in self.placed_structures
+                        if str(item.get("id")) == machine_id
+                        and not item.get("destroyed") and not item.get("under_construction")), None)
+        if machine is None or machine_id in self._manufacturing_cycles:
+            return None
+        if max(abs(agent.x - machine["x"]), abs(agent.y - machine["y"])) > 1:
+            return None
+        output = completed.get("output")
+        recipe = self._get_recipe(output)
+        if not recipe or not self._manufacturing_operator_is_fit(agent, recipe, duty_ticks=1):
+            return None
+        if float(self._colony_resources.get("energy_stored_kwh", 0)) < float(recipe.get("energy_kwh_per_batch", 0)):
+            return None
+        staged = self._staged_material_totals(machine["x"], machine["y"], purpose_recipe=output)
+        if any(staged.get(material, 0) < quantity for material, quantity in recipe.get("materials", {}).items()):
+            return None
+        planner = self.decision_engine
+        forecast, _, _ = planner._refresh_mission_forecast_recipe(self.structures_built)
+        pool = planner._pooled_materials()
+        for material, quantity in planner._contract_reservations(forecast, agent, self.current_tick).items():
+            pool[material] = pool.get(material, 0) + quantity
+        if planner._bom_outstanding_requirements(forecast, pool).get(output, 0) <= 0:
+            return None
+        return {"action": "refine", "target": {
+            "output": output, "capacity_recipe": forecast,
+            "shared_work_order": True, "workshop_reload": True,
+            "machine_id": machine_id,
+        }, "deterministic": True,
+            "reasoning": "Load the next needed batch before leaving the serviced machine"}
+
     def _offer_manufacturing_handoff(self, agent: Agent) -> dict | None:
         """Expose one due machine shift to an available qualified operator."""
         if (
             agent.action.ticks_remaining > 0
             and getattr(agent.action, "action_type", "") not in {None, "", "idle"}
         ):
+            return None
+        order = getattr(self.decision_engine, "shared_work_order", {}) or {}
+        if (
+            order.get("stage") == "construction"
+            and agent.id in order.get("construction_shift_crew_ids", [])
+            and any(str(site.get("id")) == str(order.get("site_id"))
+                    and site.get("under_construction") and not site.get("destroyed")
+                    for site in self.placed_structures)
+        ):
+            # Preserve the current strategic objective's one assigned site
+            # supervisor. Spare crew can service the completed machine.
             return None
         expedition = getattr(agent, "_active_expedition", None)
         if (
@@ -3439,9 +4007,12 @@ class SimulationEngine:
                 candidates.append(cycle)
         if not candidates:
             return None
+        # A completed batch physically blocks a cell and takes only one short
+        # inspection to release, so it precedes a paused unfinished shift.
         cycle = min(
             candidates,
             key=lambda candidate: (
+                0 if candidate.get("output_ready") else 1,
                 max(
                     abs(int(candidate.get("x", agent.x)) - agent.x),
                     abs(int(candidate.get("y", agent.y)) - agent.y),
@@ -3449,10 +4020,9 @@ class SimulationEngine:
                 str(candidate.get("machine_id")),
             ),
         )
-        cycle["route_operator_id"] = agent.id
-        cycle["route_reserved_until_tick"] = (
-            self.current_tick + self.MANUFACTURING_SHIFT_TICKS
-        )
+        # An offer is not a physical dispatch. The REFINE executor reserves
+        # this machine only after EVA preparation succeeds and travel starts.
+        # Self-care must not reserve a completed batch against another worker.
         offer = self._manufacturing_action_target(cycle, resumed=True, handoff=True)
         offer["handoff_from_operator_id"] = cycle.get("operator_id")
         agent._paused_manufacturing = offer
@@ -3514,6 +4084,7 @@ class SimulationEngine:
         site_x: int,
         site_y: int,
         purpose_recipe: str | None = None,
+        preferred_crew: Agent | None = None,
     ) -> bool:
         """Consume a bill of materials from staged stock without teleporting loads."""
         totals = self._staged_material_totals(
@@ -3534,6 +4105,11 @@ class SimulationEngine:
         ]
         for material, needed in requirements.items():
             remaining = needed
+            if preferred_crew is not None and preferred_crew in staged_crew:
+                carried = min(remaining, preferred_crew.inventory.materials.get(material, 0))
+                if carried:
+                    preferred_crew.inventory.remove_material(material, carried)
+                    remaining -= carried
             from_depot = min(
                 remaining,
                 self._available_depot_quantity(material, purpose_recipe),
@@ -4861,9 +5437,9 @@ class SimulationEngine:
         return max(0, int(math.ceil(route_cost / pace)))
 
     def _eva_return_water_threshold(self, agent: Agent) -> float:
-        """Routed walk-back plus 30 minutes, arriving above dehydration risk."""
-        cells = self._eva_walk_home_ticks(agent)
-        return 35.0 + (cells + ticks_for_minutes(30, self.SIM_MINUTES_PER_TICK)) * self._eva_water_demand_l(agent) * 35.0
+        """Actual return transport plus 30 minutes above dehydration risk."""
+        return_ticks = self._eva_return_transport_ticks(agent)
+        return 35.0 + (return_ticks + ticks_for_minutes(30, self.SIM_MINUTES_PER_TICK)) * self._eva_water_demand_l(agent) * 35.0
 
     def _eva_walk_home_ticks(self, agent: Agent) -> int | float:
         """Budget the exterior approach actually used by the walking motor."""
@@ -4882,6 +5458,46 @@ class SimulationEngine:
         # One extra tick covers the apron-to-chamber leg. The caller adds its
         # own physiological contingency for the pressure cycle and queue.
         return self._eva_walk_route_ticks(agent, route) + 1
+
+    def _eva_return_transport_ticks(self, agent: Agent) -> int | float:
+        """Budget the actual ride home, falling back to the routed walk."""
+        expedition = getattr(agent, "_active_expedition", None)
+        if (
+            not isinstance(expedition, dict)
+            or expedition.get("transport") != "crew_rover"
+            or expedition.get("rover_fault")
+        ):
+            return self._eva_walk_home_ticks(agent)
+        rover = self.surface_fleet.crew_rover_for_expedition(
+            str(expedition.get("id", ""))
+        )
+        if (
+            rover is None
+            or rover.state != "in_use"
+            or float(rover.condition) < 0.55
+        ):
+            return self._eva_walk_home_ticks(agent)
+        route = expedition.get("route") or (rover.mission or {}).get(
+            "route", []
+        )
+        if not route:
+            return self._eva_walk_home_ticks(agent)
+        route_index = max(
+            0,
+            min(
+                len(route) - 1,
+                int(expedition.get("route_index", len(route) - 1)),
+            ),
+        )
+        speed = max(1, int(expedition.get("move_speed_cells", 1)))
+        walk_to_rover = math.ceil(
+            max(abs(agent.x - rover.x), abs(agent.y - rover.y))
+            / max(1, self.EVA_WALK_SPEED_CELLS)
+        )
+        # route_index is the number of recorded route edges remaining to the
+        # landing hub on a homeward traversal. One final tick covers the
+        # controlled apron/suitlock transition.
+        return walk_to_rover + math.ceil(route_index / speed) + 1
 
     def _prepare_eva_water(self, agent: Agent,
                            target_position: tuple[int, int] | None,
@@ -6793,10 +7409,23 @@ class SimulationEngine:
         if self.strategic_policy.deadline_learning and (
             self.current_tick <= state["support_soak"]["infrastructure_deadline_tick"]
         ):
-            self._strategy_deadline_readiness = max(
-                self._strategy_deadline_readiness,
-                min(self.colony_score.get_scores().values(), default=0.0),
+            scores = {
+                name: float(value)
+                for name, value in self.colony_score.get_scores().items()
+            }
+            values = list(scores.values())
+            current_rank = (
+                min(values, default=0.0),
+                sum(values) / max(1, len(values)),
             )
+            previous_values = list(self._strategy_deadline_scores.values())
+            previous_rank = (
+                min(previous_values, default=-1.0),
+                sum(previous_values) / max(1, len(previous_values)),
+            )
+            if not self._strategy_deadline_scores or current_rank > previous_rank:
+                self._strategy_deadline_scores = scores
+                self._strategy_deadline_readiness = current_rank[0]
         non_soak_gates = {
             name: passed for name, passed in state["arrival_gates"].items()
             if name != "thirty_day_support_model"
@@ -7156,6 +7785,32 @@ class SimulationEngine:
             0, self.MAX_CONTINUOUS_EVA_TICKS - int(getattr(agent, "_eva_ticks_continuous", 0))
         )
         return max(0, min(o2_ticks, scrubber_ticks, battery_ticks, continuous_ticks))
+
+    def _expedition_fatigue_return_threshold(
+        self, agent: Agent, expedition: dict | None
+    ) -> float:
+        """Reserve the real walk back to a parked construction rover."""
+        if (
+            not isinstance(expedition, dict)
+            or expedition.get("kind") != "construction_support"
+            or expedition.get("status") != "working"
+        ):
+            return 55.0
+        return_ticks = self._eva_return_transport_ticks(agent)
+        if not math.isfinite(return_ticks):
+            return 55.0
+        # Forty-five percent is the field-work floor. One contingency tick plus
+        # the actual walk/drive home is charged with the same fatigue model as
+        # EVA movement. The funded airlock return remains intact.
+        return min(
+            55.0,
+            max(
+                45.0,
+                45.0
+                + (float(return_ticks) + 1.0)
+                * self._estimated_eva_energy_drain_per_tick(agent, 1.5),
+            ),
+        )
 
     def _expedition_required_ticks(self, target_distance: int, current_distance: int = 0) -> int:
         """Travel from current position to target, then home, plus field work."""
@@ -7533,6 +8188,7 @@ class SimulationEngine:
         if buddy is None:
             wait_for_crew("awaiting_assigned_rover_buddy")
             return True
+
         if not reservation:
             recipe = self._get_recipe(site["type"]) or {}
             qualification_recipe = {**recipe, "materials": {}}
@@ -7826,12 +8482,76 @@ class SimulationEngine:
             member.action.ticks_remaining = 1
         return False
 
+    def _carried_rescue_decision(self, agent):
+        """Keep casualty custody across a carried drink/meal/cylinder pause."""
+        patient_id = getattr(agent, "_carried_rescue_patient_id", None)
+        if not patient_id:
+            return None
+        patient = next((crew for crew in self.agents if crew.id == patient_id), None)
+        if (patient is None
+            or getattr(patient.status, "value", str(patient.status)) == "dead"
+            or patient._in_habitat):
+            agent._carried_rescue_patient_id = None
+            return None
+        return {"action": "rescue", "target": {"victim_id": patient.id},
+                "deterministic": True,
+                "reasoning": "Resume physical casualty transport after self-care"}
+
+    def _detach_rescued_expedition_member(self, victim: Agent) -> None:
+        """Transfer a casualty to SAR without retaining the old rendezvous."""
+        state = getattr(victim, "_active_expedition", None)
+        if not isinstance(state, dict):
+            return
+        expedition_id = state.get("id")
+        victim._active_expedition = None
+        victim._pending_expedition = None
+        victim._construction_preparation = None
+        victim._shared_work_contract = None
+        if state.get("transport") == "crew_rover":
+            team = [crew for crew in self.agents if crew.id in {
+                state.get("lead_id"), state.get("buddy_id"), victim.id,
+            }]
+            rover = self.surface_fleet.crew_rover_for_expedition(str(expedition_id))
+            remaining = [crew for crew in team if crew is not victim
+                         and isinstance(getattr(crew, "_active_expedition", None), dict)
+                         and crew._active_expedition.get("id") == expedition_id]
+            driver = remaining[0] if len(remaining) == 1 else None
+            if (driver is not None and rover is not None and rover.state == "in_use"
+                and getattr(driver.status, "value", str(driver.status)) not in {"dead", "incapacitated"}
+                and not driver._in_habitat and driver.injury_level < 0.40
+                and driver.needs.energy >= 30.0 and driver.needs.o2_supply >= 30.0
+                and not getattr(driver, "has_micro_puncture", False)
+                and (driver.x, driver.y) == (rover.x, rover.y)):
+                # SAR now owns the absent passenger. A conscious occupant may
+                # drive the existing vehicle HOME, never start solo field work.
+                # Both dispatchers retain real route, energy and airlock costs.
+                other = driver._active_expedition
+                other.update(role="lead", lead_id=driver.id, lead_name=driver.name,
+                             buddy_id=None, buddy_name=None, status="returning",
+                             emergency_solo_return=True)
+                rover.mission["crew_ids"] = [driver.id]
+                driver.action.action_type = "move"
+                driver.action.target = {"x": self.lz_x, "y": self.lz_y,
+                                        "destination": "shelter", "expedition": True}
+                driver.action.ticks_remaining = 1
+            else:
+                self._recover_incomplete_rover_team(state, team)
+        else:
+            for crew in self.agents:
+                other = getattr(crew, "_active_expedition", None)
+                if isinstance(other, dict) and other.get("id") == expedition_id:
+                    self.decision_engine._recall_expedition_team(crew)
+
     def _recover_incomplete_rover_team(self, state: dict, team: list[Agent]) -> bool:
         """Cancel an orphaned assignment without moving an absent passenger."""
         expedition_id = state.get("id")
         matching = [crew for crew in team
                     if isinstance(getattr(crew, "_active_expedition", None), dict)
                     and crew._active_expedition.get("id") == expedition_id]
+        if (state.get("emergency_solo_return") and state.get("status") == "returning"
+            and len(team) == 1 and len(matching) == 1
+            and getattr(team[0].status, "value", str(team[0].status)) not in {"dead", "incapacitated"}):
+            return False
         if len(team) == 2 and len(matching) == 2 and all(
             getattr(crew.status, "value", str(crew.status)) != "dead" for crew in team
         ):
@@ -7903,7 +8623,8 @@ class SimulationEngine:
         lead = next(
             (crew for crew in team if crew.id == state.get("lead_id")), None
         )
-        if lead is None or len(team) != 2:
+        expected_crew = 1 if state.get("emergency_solo_return") else 2
+        if lead is None or len(team) != expected_crew:
             return False
         master = getattr(lead, "_active_expedition", None)
         if not isinstance(master, dict):
@@ -9377,7 +10098,9 @@ class SimulationEngine:
                     }
                     assisting_builders.sort(key=lambda builder: (
                         0 if builder.id in assigned_ids else 1,
-                        -self._construction_productivity(builder),
+                        -self._construction_productivity(
+                            builder, include_effort=False
+                        ),
                         builder.id,
                     ))
                     surplus_builders = assisting_builders[
@@ -9416,19 +10139,68 @@ class SimulationEngine:
                     struct["active_assembly_robot_count"] = 0
                     continue
 
-                human_work_this_tick = sum(
-                    self._construction_productivity(builder)
+                active_robot_count = len(
+                    robot_assist.get("active_robot_ids", [])
+                )
+                base_human_work = {
+                    builder.id: self._construction_productivity(
+                        builder, include_effort=False
+                    ) * self.SIM_HOURS_PER_TICK
                     for builder in assisting_builders
-                ) * self.SIM_HOURS_PER_TICK
+                }
+                for builder in assisting_builders:
+                    self._construction_effort_mode(
+                        builder, struct, active_robot_count
+                    )
+                actual_human_work = {
+                    builder.id: self._construction_productivity(builder)
+                    * self.SIM_HOURS_PER_TICK
+                    for builder in assisting_builders
+                }
+                human_work_this_tick = sum(actual_human_work.values())
                 robot_work_this_tick = float(
                     robot_assist.get("work_hours", 0.0)
                 )
                 work_this_tick = human_work_this_tick + robot_work_this_tick
-                required_hours = max(0.1, float(struct.get("required_work_hours", 1.0)))
+                required_hours = max(
+                    0.1, float(struct.get("required_work_hours", 1.0))
+                )
+                previous_completed_hours = float(
+                    struct.get("work_hours_completed", 0.0)
+                )
                 completed_hours = min(
                     required_hours,
-                    float(struct.get("work_hours_completed", 0.0)) + work_this_tick,
+                    previous_completed_hours + work_this_tick,
                 )
+                remaining_useful_hours = max(
+                    0.0, required_hours - previous_completed_hours
+                )
+                if utility_route_pending:
+                    remaining_useful_hours = max(
+                        remaining_useful_hours,
+                        max(
+                            0.0,
+                            float(struct.get("utility_route_work_hours", 0.0))
+                            - float(struct.get(
+                                "utility_route_work_hours_completed", 0.0
+                            )),
+                        ),
+                    )
+                accepted_fraction = (
+                    min(1.0, remaining_useful_hours / work_this_tick)
+                    if work_this_tick > 1e-9 else 0.0
+                )
+                for builder in assisting_builders:
+                    self._record_construction_effort(
+                        builder,
+                        struct,
+                        productive_work_hours=(
+                            actual_human_work[builder.id] * accepted_fraction
+                        ),
+                        baseline_work_hours=(
+                            base_human_work[builder.id] * accepted_fraction
+                        ),
+                    )
                 struct["work_hours_completed"] = completed_hours
                 struct["active_builder_count"] = len(assisting_builders)
                 struct["active_assembly_robot_count"] = len(
@@ -10923,7 +11695,33 @@ class SimulationEngine:
     def _process_agent_tick(self, agent: Agent, active_events: list,
                             nearby_count: int) -> dict:
         """Process one tick for a single agent."""
+        effort_contract = getattr(
+            agent, "_construction_effort_contract", None
+        )
+        if isinstance(effort_contract, dict):
+            action_target = (
+                agent.action.target
+                if isinstance(getattr(agent.action, "target", None), dict)
+                else {}
+            )
+            same_site = str(action_target.get("struct_id", "")) == str(
+                effort_contract.get("site_id", "")
+            )
+            continuing_shift = same_site and (
+                getattr(agent.action, "action_type", "") == "build"
+                or (
+                    getattr(agent.action, "action_type", "") == "move"
+                    and action_target.get("construction_route")
+                )
+            )
+            if not continuing_shift:
+                self._settle_construction_effort(
+                    agent, completed=True, reason="work_reassigned"
+                )
         if getattr(agent.status, 'value', str(agent.status)) == 'dead':
+            self._settle_construction_effort(
+                agent, completed=False, reason="crew_deceased"
+            )
             self._pause_manufacturing_cycle(
                 agent,
                 "operator_unavailable",
@@ -11524,6 +12322,19 @@ class SimulationEngine:
                         self._manufacturing_automation_telemetry[
                             "cycles_unloaded"
                         ] += 1
+                    unload_wait = max(
+                        0,
+                        int(self.current_tick)
+                        - int(manufacturing_cycle.get(
+                            "process_completed_tick", self.current_tick
+                        )),
+                    )
+                    telemetry = self._manufacturing_automation_telemetry
+                    telemetry["unload_wait_ticks_total"] += unload_wait
+                    telemetry["unload_wait_ticks_max"] = max(
+                        int(telemetry.get("unload_wait_ticks_max", 0)),
+                        unload_wait,
+                    )
                     if (
                         machine_id
                         and self._manufacturing_cycles.get(str(machine_id))
@@ -11534,6 +12345,7 @@ class SimulationEngine:
                     "output": output,
                     "quantity": quantity,
                     "machine_id": machine_id,
+                    "capacity_recipe": completion_record.get("capacity_recipe"),
                 }
                 for crew in self.agents:
                     paused = getattr(crew, "_paused_manufacturing", None)
@@ -11745,11 +12557,27 @@ class SimulationEngine:
                 agent, distance_from_base
             )
         )
+        expedition_energy_return_threshold = (
+            self._expedition_fatigue_return_threshold(
+                agent, active_expedition_state
+            )
+        )
         routine_o2_return_threshold = self._routine_eva_o2_return_threshold(
             agent, distance_from_base
         )
+        routine_scrubber_return_threshold = 0.0
+        routine_battery_return_threshold = 0.0
         if not agent._in_habitat:
-            return_ticks = self._eva_walk_home_ticks(agent)
+            return_ticks = self._eva_return_transport_ticks(agent)
+            tick_scale = self.SIM_MINUTES_PER_TICK / 5.0
+            routine_scrubber_return_threshold = min(
+                80.0,
+                18.0 + return_ticks * 0.35 * 1.5 * tick_scale,
+            )
+            routine_battery_return_threshold = min(
+                80.0,
+                18.0 + return_ticks * 0.40 * tick_scale,
+            )
             routine_energy_return_threshold = min(
                 95.0, 55.0 + return_ticks
                 * self._estimated_eva_energy_drain_per_tick(agent, 1.5)
@@ -11762,7 +12590,16 @@ class SimulationEngine:
         agent._routine_eva_energy_return_threshold = (
             routine_energy_return_threshold
         )
+        agent._expedition_energy_return_threshold = (
+            expedition_energy_return_threshold
+        )
         agent._routine_eva_o2_return_threshold = routine_o2_return_threshold
+        agent._routine_eva_scrubber_return_threshold = (
+            routine_scrubber_return_threshold
+        )
+        agent._routine_eva_battery_return_threshold = (
+            routine_battery_return_threshold
+        )
         water_return_threshold = (
             0.0 if agent._in_habitat else self._eva_return_water_threshold(agent)
         )
@@ -11770,7 +12607,7 @@ class SimulationEngine:
         fatigue_interrupt_threshold = (
             15.0 if agent._in_habitat and overtime_active
             else 65.0 if agent._in_habitat
-            else 55.0 if expedition_in_progress
+            else expedition_energy_return_threshold if expedition_in_progress
             else routine_energy_return_threshold
         )
         plss_return_threshold = (
@@ -11784,6 +12621,18 @@ class SimulationEngine:
             and (
                 agent.needs.energy <= fatigue_interrupt_threshold
                 or agent.needs.o2_supply <= plss_return_threshold
+                or (
+                    not agent._in_habitat
+                    and float(getattr(
+                        agent, "plss_co2_scrubber_pct", 100.0
+                    )) <= routine_scrubber_return_threshold
+                )
+                or (
+                    not agent._in_habitat
+                    and float(getattr(
+                        agent, "plss_suit_battery_pct", 100.0
+                    )) <= routine_battery_return_threshold
+                )
                 or agent.needs.thirst <= (
                     45.0 if agent._in_habitat else
                     65.0 if agent.inventory.has_item("water_packs") else water_return_threshold
@@ -11819,8 +12668,17 @@ class SimulationEngine:
                 "physiological_safety_interrupt": True,
             }
             agent_events["physiological_safety_interrupt"] = interrupted_action
+            if interrupted_action == "build":
+                self._settle_construction_effort(
+                    agent,
+                    completed=False,
+                    reason="physiological_safety_interrupt",
+                )
 
         if agent_events.get("fatigue_collapse"):
+            self._settle_construction_effort(
+                agent, completed=False, reason="fatigue_collapse"
+            )
             self._settle_movement_effort(
                 agent, completed=False, reason="fatigue_collapse"
             )
@@ -11876,8 +12734,10 @@ class SimulationEngine:
             # A second decrement here halved sleep/recovery and work durations.
             pass
         else:
+            reload_decision = (self._offer_workshop_reload(agent, agent_events.get("manufacturing_completed"))
+                               if not incapacitated_crew and not active_events else None)
             offered_manufacturing_cycle = None
-            if (not incapacitated_crew and not active_events
+            if (reload_decision is None and not incapacitated_crew and not active_events
                 and not getattr(agent, "_construction_preparation", None)):
                 # Claim due machine-owned WIP before ordinary colony planning.
                 # Materials and batch energy were already committed, so a
@@ -11995,8 +12855,13 @@ class SimulationEngine:
                 self._construction_preparation_decision(agent)
                 if not incapacitated_crew and not active_events else None
             )
-            if preparation_decision is not None:
+            carried_rescue = self._carried_rescue_decision(agent)
+            if carried_rescue is not None:
+                decision = carried_rescue
+            elif preparation_decision is not None:
                 decision = preparation_decision
+            elif reload_decision is not None:
+                decision = reload_decision
             elif offered_manufacturing_cycle is not None:
                 decision = {
                     "action": "refine",
@@ -12144,6 +13009,13 @@ class SimulationEngine:
                 reasoning = (
                     f"{agent.name} completing mandatory meal before duty"
                 )
+
+            # A recall must carry the patient home too. Real in-suit self-care
+            # may pause transport, but cannot erase casualty custody.
+            if carried_rescue is not None and action not in {"drink", "eat", "refill_o2"}:
+                action = "rescue"
+                target = dict(carried_rescue["target"])
+                decision["deterministic"] = True
 
             # Reject stale/LLM/RL logistics orders before they become visible
             # multi-tick actions. A zero-payload deposit has no physical work
@@ -13998,11 +14870,26 @@ class SimulationEngine:
                         site for site in self.placed_structures
                         if site.get("under_construction", False)
                         and not site.get("destroyed", False)
+                        and site.get("type") == recipe_name
                         and (
-                            (requested_struct_id and site.get("id") == requested_struct_id)
-                            or (not requested_struct_id and site.get("type") == recipe_name)
+                            not requested_struct_id
+                            or site.get("id") == requested_struct_id
                         )
                     ), None)
+                    if (
+                        active_site is None
+                        and requested_struct_id
+                    ):
+                        # A multi-tick action can still name the unit that just
+                        # completed while its already-open successor is live.
+                        # Join that successor instead of treating a stale ID as
+                        # permission to reserve a third BOM and duplicate site.
+                        active_site = next((
+                            site for site in self.placed_structures
+                            if site.get("under_construction", False)
+                            and not site.get("destroyed", False)
+                            and site.get("type") == recipe_name
+                        ), None)
                     if active_site:
                         if not active_site.get("materials_committed", True):
                             reservation = self._construction_cargo_reservations.get(
@@ -16367,6 +17254,7 @@ class SimulationEngine:
                             mx,
                             my,
                             purpose_recipe=target_output,
+                            preferred_crew=agent,
                         )
                         self._colony_resources["energy_stored_kwh"] = (
                             energy_available - power_cost
@@ -16417,6 +17305,7 @@ class SimulationEngine:
                             "y": my,
                             "output": target_output,
                             "output_quantity": out_qty,
+                            "capacity_recipe": target.get("capacity_recipe"),
                             "completion_pending": True,
                             "energy_kwh": power_cost,
                             "machine_type": req_struct,
@@ -16519,22 +17408,16 @@ class SimulationEngine:
                     else:
                         # At victim! Stabilize and carry victim towards nearest habitat airlock
                         carrying_victim = True
+                        agent._carried_rescue_patient_id = victim.id
+                        self._detach_rescued_expedition_member(victim)
                         lz_x = getattr(self, "lz_x", 1000)
                         lz_y = getattr(self, "lz_y", 1000)
                         shelter_x, shelter_y = self._lander_airlock_position()
                         main_lander_selected = True
-                        min_shelter_dist = max(
-                            abs(agent.x - shelter_x),
-                            abs(agent.y - shelter_y),
-                        )
-                        for s in getattr(self, "placed_structures", []):
-                            if s.get("type") == "habitat_module" and not s.get("under_construction", False) and not s.get("destroyed", False):
-                                sx, sy = s.get("x", lz_x), s.get("y", lz_y)
-                                dist = max(abs(agent.x - sx), abs(agent.y - sy))
-                                if dist < min_shelter_dist:
-                                    min_shelter_dist = dist
-                                    shelter_x, shelter_y = sx, sy
-                                    main_lander_selected = False
+                        # Definitive casualty care is stocked at the lander.
+                        # A nearby pressure hull is not a medical destination:
+                        # leaving an unconscious patient there stranded them
+                        # without the depot's finite IV/IO supplies.
 
                         if (main_lander_selected and not agent._in_habitat
                             and (agent.x, agent.y) == self._lander_airlock_exterior_position()):
@@ -17525,7 +18408,12 @@ class SimulationEngine:
             "energy", "o2", "water", "food",
             "shelter", "hazard_protection",
         )
-        scores = self.colony_score.get_scores()
+        scores = (
+            self._strategy_deadline_scores
+            if self.strategic_policy.deadline_learning
+            and self._strategy_deadline_scores
+            else self.colony_score.get_scores()
+        )
         categories = [
             unit(scores.get(name, 0.0)) for name in category_names
         ]
@@ -17578,6 +18466,10 @@ class SimulationEngine:
         if self._terminal_learning_finalized or self.end_reason == "running":
             return
         outcome = str(self.end_reason)
+        for crew in self.agents:
+            self._settle_construction_effort(
+                crew, completed=True, reason="mission_end"
+            )
         if not self._terminal_reward_applied:
             self.strategic_policy.finish_episode(
                 outcome,
@@ -17586,7 +18478,12 @@ class SimulationEngine:
                     * self.mission_profile.clock.tick_minutes
                     / 1440.0
                 ),
-                category_scores=self.colony_score.get_scores(),
+                category_scores=(
+                    self._strategy_deadline_scores
+                    if self.strategic_policy.deadline_learning
+                    and self._strategy_deadline_scores
+                    else self.colony_score.get_scores()
+                ),
                 deadline_readiness=self._strategy_deadline_readiness,
                 support_soak_fraction=(self._support_soak_ticks / max(
                     1, self._mission_state()["support_soak"]["required_ticks"]
@@ -17817,6 +18714,9 @@ class SimulationEngine:
                 ),
             },
             "movement_effort_rl": dict(self._movement_effort_telemetry),
+            "construction_effort_rl": dict(
+                self._construction_effort_telemetry
+            ),
             "surface_mobility": {
                 "routine_nominal_cells_per_tick": self.EVA_WALK_SPEED_CELLS,
                 "expedition_nominal_cells_per_tick": (
@@ -18009,6 +18909,9 @@ class SimulationEngine:
                 ),
             },
             "movement_effort_rl": dict(self._movement_effort_telemetry),
+            "construction_effort_rl": dict(
+                self._construction_effort_telemetry
+            ),
             "surface_mobility": {
                 "routine_nominal_cells_per_tick": self.EVA_WALK_SPEED_CELLS,
                 "expedition_nominal_cells_per_tick": (

@@ -184,6 +184,89 @@ class ConstructionRoverRegressionTest(unittest.TestCase):
             "construction_rover_rendezvous", buddy.action.target["destination"]
         )
 
+    def test_sar_pickup_releases_patient_and_recalls_remaining_partner(self):
+        self._arrive()
+        patient, partner = self.crew
+        rover = self.engine.surface_fleet.crew_rovers[0]
+        before = (rover.x, rover.y, rover.battery_kwh)
+        positions = [(c.x, c.y) for c in self.crew]
+        partner.needs.energy = 20.0  # unfit to drive: retain physical walkback
+        self.engine._detach_rescued_expedition_member(patient)
+        self.assertIsNone(patient._active_expedition)
+        self.assertIsNone(patient._pending_expedition)
+        self.assertEqual('returning', partner._active_expedition['status'])
+        self.assertEqual('on_foot', partner._active_expedition['transport'])
+        self.assertEqual('shelter', partner.action.target['destination'])
+        self.assertEqual(positions, [(c.x, c.y) for c in self.crew])
+        self.assertEqual(before, (rover.x, rover.y, rover.battery_kwh))
+        self.assertEqual('fault', rover.state)
+        self.engine._detach_rescued_expedition_member(patient)
+        self.assertIsNone(patient._active_expedition)
+        self.engine.current_tick += 1
+        self.engine._process_agent_tick(partner, [], 1)
+        self.assertNotEqual(positions[1], (partner.x, partner.y))
+
+    def test_sar_allows_healthy_remaining_occupant_to_drive_home(self):
+        state = self._arrive()
+        patient, driver = self.crew
+        rover = self.engine.surface_fleet.crew_rovers[0]
+        patient_position = (patient.x, patient.y)
+        distance, energy = rover.total_distance_km, rover.battery_kwh
+        self.engine._detach_rescued_expedition_member(patient)
+        self.assertEqual([driver.id], rover.mission['crew_ids'])
+        self.assertTrue(driver._active_expedition['emergency_solo_return'])
+        self.assertEqual('returning', driver._active_expedition['status'])
+        self.assertEqual('in_use', rover.state)
+        for _ in range(20):
+            self.engine.current_tick += 1
+            self.engine._move_construction_rover_team(driver, {'destination': 'shelter'})
+            if driver._active_expedition is None:
+                break
+        self.assertIsNone(driver._active_expedition)
+        self.assertTrue(driver._in_habitat)
+        self.assertEqual(patient_position, (patient.x, patient.y))
+        self.assertIsNone(rover.mission)
+        self.assertGreater(rover.total_distance_km, distance)
+        self.assertLess(rover.battery_kwh, energy)
+        self.assertEqual('charging', rover.state)
+
+    def test_sar_solo_return_requires_driver_physically_at_rover(self):
+        self._arrive()
+        patient, driver = self.crew
+        driver.x += 3
+        rover = self.engine.surface_fleet.crew_rovers[0]
+        position = (driver.x, driver.y)
+        self.engine._detach_rescued_expedition_member(patient)
+        self.assertEqual(position, (driver.x, driver.y))
+        self.assertEqual('on_foot', driver._active_expedition['transport'])
+        self.assertFalse(driver._active_expedition.get('emergency_solo_return', False))
+        self.assertEqual('fault', rover.state)
+
+    def test_sar_resource_rover_returns_with_one_real_occupant(self):
+        patient, driver = self.crew
+        state = self.engine._start_regional_survey_expedition(
+            patient, 'basalt', (self.engine.lz_x + 18, self.engine.lz_y + 10), ['basalt']
+        )
+        for _ in range(8):
+            self.engine.current_tick += 1
+            self.engine._move_resource_rover_team(patient, {'expedition': True})
+            if state['status'] == 'working':
+                break
+        rover = self.engine.surface_fleet.crew_rovers[0]
+        position = (patient.x, patient.y)
+        self.engine._detach_rescued_expedition_member(patient)
+        self.assertTrue(driver._active_expedition['emergency_solo_return'])
+        for _ in range(20):
+            self.engine.current_tick += 1
+            self.engine._move_resource_rover_team(driver, {'destination': 'shelter'})
+            if driver._active_expedition is None:
+                break
+        self.assertIsNone(driver._active_expedition)
+        self.assertTrue(driver._in_habitat)
+        self.assertEqual(position, (patient.x, patient.y))
+        self.assertIsNone(rover.mission)
+        self.assertEqual('charging', rover.state)
+
     def test_faulted_rover_falls_back_to_physical_walkback(self):
         self._arrive()
         origin = (self.crew[0].x, self.crew[0].y)
@@ -299,6 +382,61 @@ class ConstructionRoverRegressionTest(unittest.TestCase):
         self.assertEqual("stand_watch", decision["action"])
         self.assertEqual("awaiting_construction_lead", decision["target"]["reason"])
         self.assertEqual(lead.id, decision["target"]["construction_lead_id"])
+
+    def test_construction_workfront_fatigue_reserve_uses_rover_distance(self):
+        state = self._arrive()
+        lead = self.crew[0]
+        rover = self.engine.surface_fleet.crew_rovers[0]
+        lead.x = rover.x + 5
+        lead.y = rover.y
+
+        threshold = self.engine._expedition_fatigue_return_threshold(
+            lead, state
+        )
+        rover_water_threshold = self.engine._eva_return_water_threshold(lead)
+        lead._active_expedition = None
+        walking_water_threshold = self.engine._eva_return_water_threshold(lead)
+
+        self.assertGreater(threshold, 45.0)
+        self.assertLess(threshold, 55.0)
+        self.assertLess(rover_water_threshold, walking_water_threshold)
+        self.assertEqual(
+            55.0,
+            self.engine._expedition_fatigue_return_threshold(
+                lead, {**state, "kind": "regional_survey"}
+            ),
+        )
+
+    def test_construction_decision_uses_published_rover_energy_reserve(self):
+        state = self._arrive()
+        lead = self.crew[0]
+        lead.action.clear()
+        lead.needs.energy = 54.0
+        lead._expedition_energy_return_threshold = 50.0
+        self.planner.expedition_available_ticks = 1000
+        context = {
+            "temperature_c": 20.0,
+            "effective_temperature_c": 20.0,
+            "traversal_cost": 1.0,
+            "traversable": True,
+            "active_events": [],
+            "colony_resources": dict(self.engine._colony_resources),
+        }
+
+        decision = self.planner.process_tick(
+            lead, self.engine.current_tick, {}, context, []
+        )
+
+        self.assertEqual("working", state["status"])
+        self.assertFalse(decision.get("target", {}).get("fatigue_return", False))
+
+        lead.action.clear()
+        lead.needs.energy = 49.0
+        decision = self.planner.process_tick(
+            lead, self.engine.current_tick + 1, {}, context, []
+        )
+        self.assertEqual("returning", state["status"])
+        self.assertTrue(decision["target"]["fatigue_return"])
 
     def test_planned_sortie_clears_preflight_with_support_buddy(self):
         self.engine.placed_structures.remove(self.site)

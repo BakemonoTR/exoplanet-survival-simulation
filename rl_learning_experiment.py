@@ -46,6 +46,9 @@ def run_episode(
     completions, checkpoints, errors = [], [], []
     critical_crew = set()
     critical_onsets = 0
+    manufacturing_starts = Counter()
+    machine_ticks = Counter()
+    seen_cycles = set()
 
     def event_callback(event):
         if event.get('type') in ('construction_complete', 'structure_collapse'):
@@ -75,6 +78,8 @@ def run_episode(
         # Identical tie-breaking stream for control and learned evaluation.
         policy.attempt_count = 0
         policy.decision_count = 0
+        policy.operational_decision_count = 0
+    operational_before = copy.deepcopy(policy.operational_q_table)
     before = copy.deepcopy(policy.q_table)
     tactical_before = {
         agent.id: copy.deepcopy(agent.q_table) for agent in engine.agents
@@ -91,6 +96,23 @@ def run_episode(
         errors.extend({'tick': tick, 'error': error} for error in events.get('agent_processing_errors', []))
         window = 'days_300_360' if tick >= 300 * 144 else 'days_0_300'
         counts = windows[window]
+        # Read-only shop audit: separate physical process time, blocked output,
+        # and unused installed machine slots instead of inferring from REFINE.
+        for machine in engine.placed_structures:
+            kind = machine.get('type')
+            if kind not in ('stone_furnace', 'forge', 'cnc_fabricator'):
+                continue
+            if machine.get('destroyed') or machine.get('under_construction'):
+                continue
+            cycle = engine._manufacturing_cycles.get(str(machine.get('id')), {})
+            state = ('awaiting_unload' if cycle.get('output_ready')
+                     else 'processing' if cycle.get('active')
+                     else 'paused' if cycle.get('completion_pending') else 'idle')
+            machine_ticks[kind + ':' + state] += 1
+            cycle_id = cycle.get('cycle_id')
+            if cycle_id and cycle_id not in seen_cycles:
+                seen_cycles.add(cycle_id)
+                manufacturing_starts[str(cycle.get('output'))] += 1
         for crew in engine.agents:
             status = getattr(crew.status, 'value', str(crew.status))
             if status == 'dead':
@@ -112,7 +134,9 @@ def run_episode(
             row = {'tick': tick, 'score': engine.colony_score.to_dict(),
                    'structures': dict(engine.structures_built),
                    'strategy': policy.telemetry(), 'errors': len(errors),
-                   'wall_seconds': round(time.perf_counter() - start, 2)}
+                   'wall_seconds': round(time.perf_counter() - start, 2),
+                   'manufacturing_starts': dict(manufacturing_starts),
+                   'machine_ticks': dict(machine_ticks)}
             checkpoints.append(row)
             write_json(output / 'progress.json', row)
             print(json.dumps({'run': name, 'tick': tick, 'score': row['score']['overall'],
@@ -145,6 +169,26 @@ def run_episode(
                   if args.carry_tactical
                   else 'fresh per episode; only strategic policy transferred'
               )}
+    planner = engine.decision_engine
+    forecast, requirements, remaining = planner._refresh_mission_forecast_recipe(
+        engine.structures_built
+    )
+    pooled = planner._pooled_materials()
+    result['supply_audit'] = {
+        'manufacturing_starts': dict(manufacturing_starts),
+        'machine_ticks': dict(machine_ticks),
+        'central_depot': dict(engine.central_depot_inventory),
+        'crew_inventory': {a.id: dict(a.inventory.materials) for a in engine.agents},
+        'remaining_structure_counts': remaining,
+        'remaining_direct_materials': requirements,
+        'remaining_bom_deficits': planner._bom_outstanding_requirements(forecast, pooled),
+        'shared_work_order': copy.deepcopy(getattr(planner, 'shared_work_order', {})),
+        'work_contracts': {a.id: copy.deepcopy(getattr(a, '_shared_work_contract', None))
+                           for a in engine.agents},
+        'machine_cycles': copy.deepcopy(engine._manufacturing_cycles),
+        'active_sites': [copy.deepcopy(s) for s in engine.placed_structures
+                         if s.get('under_construction') and not s.get('destroyed')],
+    }
     write_json(output / 'result.json', result)
     tactical_end = {
         agent.id: copy.deepcopy(agent.q_table) for agent in engine.agents
@@ -153,6 +197,20 @@ def run_episode(
         write_json(output / 'policy_end.json', policy.dump())
         if args.carry_tactical:
             write_json(output / 'tactical_policy_end.json', tactical_end)
+    if evaluation:
+        if operational_before != policy.operational_q_table:
+            raise AssertionError('Frozen operational policy changed Q values')
+        for agent in engine.agents:
+            for state, actions in tactical_before[agent.id].items():
+                if state == '__tactical_meta__' or not isinstance(actions, dict):
+                    continue
+                for action, value in actions.items():
+                    if agent.q_table.get(state, {}).get(action) != value:
+                        raise AssertionError('Frozen tactical policy changed learned Q values')
+        write_json(output / 'freeze_checks.json', {
+            'strategic': result['q_values_unchanged'], 'operational': True,
+            'existing_tactical_values': True,
+            'note': 'Unseen tactical actions may receive their fixed initial Q values; no learning occurs.'})
     if evaluation and not result['q_values_unchanged']:
         raise AssertionError('Frozen strategy changed Q values')
     print(json.dumps({'finished': name, 'score': result['score']['overall'],

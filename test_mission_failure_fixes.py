@@ -306,6 +306,65 @@ class MissionFailureFixTest(unittest.TestCase):
         self.assertEqual(1, self.engine.airlock.completed_cycles)
         self.assertIsNone(self.engine.airlock.active)
 
+    def test_rescue_passes_nearer_habitat_to_reach_stocked_lander(self):
+        rescuer, patient = self.crew
+        x, y = self.engine.lz_x + 6, self.engine.lz_y + 5
+        self.engine.placed_structures.append({
+            'id': 'nearby-unstocked-habitat', 'type': 'habitat_module',
+            'x': x + 1, 'y': y, 'under_construction': False,
+            'destroyed': False, 'health': 1.0,
+        })
+        for crew in self.crew:
+            crew.x, crew.y = x, y
+            crew._in_habitat = False
+        patient.status = AgentStatus.INCAPACITATED
+        patient.needs.energy = 0.0
+        decision = {'action': 'rescue', 'target': {'victim_id': patient.id},
+                    'deterministic': True}
+        with patch.object(self.planner, 'process_tick', return_value=decision):
+            for _ in range(24):
+                self.engine.current_tick += 1
+                rescuer.action.clear()
+                self.engine._process_agent_tick(rescuer, [], 1)
+                if self.engine._is_lander_airlock_cell(patient.x, patient.y):
+                    break
+        self.assertEqual(self.engine._lander_airlock_position(), (patient.x, patient.y))
+        self.assertTrue(patient._in_habitat)
+
+    def test_rescue_resumes_after_water_pause_despite_unrelated_planner_order(self):
+        rescuer, patient = self.crew
+        x, y = self.engine.lz_x + 6, self.engine.lz_y + 5
+        self.engine.placed_structures.append({
+            'id': 'nearby-unstocked-habitat', 'type': 'habitat_module',
+            'x': x + 1, 'y': y, 'under_construction': False,
+            'destroyed': False, 'health': 1.0,
+        })
+        for crew in self.crew:
+            crew.x, crew.y = x, y
+            crew._in_habitat = False
+        patient.status = AgentStatus.INCAPACITATED
+        patient.needs.energy = 0.0
+        decision = {'action': 'rescue', 'target': {'victim_id': patient.id},
+                    'deterministic': True}
+        with patch.object(self.planner, 'process_tick', return_value=decision) as planner_call:
+            for step in range(32):
+                if step == 1:
+                    rescuer.needs.thirst = 50.0
+                    rescuer.inventory.items['water_packs'] = 2
+                    planner_call.return_value = {'action': 'idle', 'target': {}, 'deterministic': True}
+                self.engine.current_tick += 1
+                rescuer.action.clear()
+                patient_position = (patient.x, patient.y)
+                self.engine._process_agent_tick(rescuer, [], 1)
+                if step == 1:
+                    self.assertEqual("drink", rescuer.action.action_type)
+                    self.assertEqual(1, rescuer.inventory.items["water_packs"])
+                    self.assertEqual(patient_position, (patient.x, patient.y))
+                if self.engine._is_lander_airlock_cell(patient.x, patient.y):
+                    break
+        self.assertEqual(self.engine._lander_airlock_position(), (patient.x, patient.y))
+        self.assertTrue(patient._in_habitat)
+
     def test_uncommissioned_or_failed_pressure_hull_cannot_supply_shelter(self):
         crew = self.crew[0]
         crew.x, crew.y = self.engine.lz_x + 7, self.engine.lz_y - 5
@@ -636,6 +695,20 @@ class MissionFailureFixTest(unittest.TestCase):
         self.assertEqual('sleep', responder.action.action_type)
         self.assertFalse(responder.action.target.get('woken_by_team_emergency'))
         self.assertGreater(responder.needs._consecutive_sleep_ticks, 1)
+
+    def test_carried_casualty_survives_self_care_action_replacement(self):
+        victim, rescuer = self.crew
+        victim._in_habitat = False
+        victim.status = AgentStatus.INCAPACITATED
+        rescuer._carried_rescue_patient_id = victim.id
+        rescuer.action.action_type = "drink"
+        rescuer.action.target = {"field": True, "pre_duty_interlock": True}
+        decision = self.engine._carried_rescue_decision(rescuer)
+        self.assertEqual("rescue", decision["action"])
+        self.assertEqual(victim.id, decision["target"]["victim_id"])
+        victim._in_habitat = True
+        self.assertIsNone(self.engine._carried_rescue_decision(rescuer))
+        self.assertIsNone(rescuer._carried_rescue_patient_id)
 
     def test_sar_prefers_ready_responder_to_exhausted_expert(self):
         victim, expert = self.crew

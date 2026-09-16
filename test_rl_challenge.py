@@ -140,6 +140,52 @@ class PlanetScopedRLTest(unittest.TestCase):
             "weakest_category", near_history["components"]
         )
 
+    def test_deadline_learning_ignores_capacity_built_during_support_window(self):
+        engine = SimulationEngine(
+            os.path.join(
+                ROOT, "config", "planets", "kepler-442b.json"
+            ),
+            db=False,
+            strategic_deadline_learning=True,
+        )
+        engine.add_agent(create_team_from_presets(
+            os.path.join(ROOT, "config", "agent_presets.json")
+        )[0])
+
+        def set_score(level):
+            for category, config in engine.colony_score._targets.items():
+                engine.colony_score._current[category] = (
+                    float(config["target"]) * level
+                )
+
+        deadline = int(
+            engine._mission_state()["support_soak"]
+            ["infrastructure_deadline_tick"]
+        )
+        set_score(0.60)
+        engine.current_tick = deadline
+        engine._update_support_soak()
+
+        # These real structures improve the display score, but they are too
+        # late to start the required thirty-day qualification window.
+        set_score(0.95)
+        engine.current_tick = deadline + 1
+        engine._update_support_soak()
+        engine.current_tick = engine.mission_profile.clock.planet_attempt_max_ticks
+        engine.end_reason = "timeout"
+        engine._finalize_terminal_learning()
+
+        self.assertEqual(
+            {category: 0.60 for category in engine.colony_score.get_scores()},
+            engine._strategy_deadline_scores,
+        )
+        self.assertAlmostEqual(
+            -27.0, engine.strategic_policy.last_outcome["reward"]
+        )
+        self.assertAlmostEqual(
+            -13.5, engine._tactical_terminal_outcome["reward"]
+        )
+
     def test_dialogue_and_reflection_are_opt_in_for_headless_runs(self):
         engine = SimulationEngine(
             os.path.join(ROOT, "config", "planets", "kepler-442b.json"),

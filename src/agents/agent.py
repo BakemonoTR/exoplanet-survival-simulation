@@ -1692,14 +1692,13 @@ class Agent:
                 self.action.target
                 if isinstance(self.action.target, dict) else {}
             )
-            # A learned surge is real exertion, not free movement. Brisk
-            # suited travel raises metabolic O2, water, food, fatigue and
-            # thermal loads through the same physiology path as every other
-            # action. The engine permits it only inside a conservative health
-            # envelope and rewards the completed trip after measuring both
-            # elapsed time and reserve loss.
+            # A learned surge is real exertion. Brisk suited travel and
+            # short high-tempo construction bouts raise metabolic O2, water,
+            # food, fatigue and thermal loads through the same physiology path
+            # as every other action. The engine permits either only inside a
+            # conservative health envelope and credits measured local work.
             if (
-                self.action.action_type == "move"
+                self.action.action_type in {"move", "build"}
                 and target.get("effort_mode") == "surge"
             ):
                 activity *= max(
